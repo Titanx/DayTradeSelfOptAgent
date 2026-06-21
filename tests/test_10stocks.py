@@ -48,7 +48,6 @@ CACHE.set_trade_date(TRADE_DATE)
 print("=" * 70)
 print(f"  🔬 10支股票测试 — 缓存验证")
 print(f"  📅 交易日: {TRADE_DATE}")
-print(f"  🌐 LLM Key: {os.environ.get('DEEPSEEK_API_KEY', '?')[:15]}...")
 print(f"  📂 项目根目录: {project_dir}")
 print("=" * 70)
 

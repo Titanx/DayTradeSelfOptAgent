@@ -88,6 +88,7 @@ def route_to_vendor(method: str, *args, config: dict = None, **kwargs) -> Any:
     路由到数据 vendor
 
     支持 fallback 链：如果主 vendor 失败，尝试下一个。
+    公共数据（市场情绪、北向资金、行业板块等）自动走缓存。
 
     Args:
         method: 工具方法名
@@ -97,6 +98,14 @@ def route_to_vendor(method: str, *args, config: dict = None, **kwargs) -> Any:
     Returns:
         底层方法的返回值
     """
+    # ———— 缓存拦截：公共数据优先走缓存 ————
+    from .market_cache import MarketDataCache
+    cache = MarketDataCache.get_instance()
+    if cache.is_public_method(method):
+        cached = cache.get(method)
+        if cached is not None:
+            return cached
+
     if config is None:
         from config.default_config import get_config
         config = get_config()
@@ -125,6 +134,9 @@ def route_to_vendor(method: str, *args, config: dict = None, **kwargs) -> Any:
         try:
             result = func(*args, **kwargs)
             if result is not None:
+                # ———— 缓存保存：公共数据成功获取后写入缓存 ————
+                if cache.is_public_method(method):
+                    cache.set(method, result)
                 return result
         except Exception as e:
             last_error = e

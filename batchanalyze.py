@@ -23,6 +23,7 @@ sys.path.insert(0, str(project_dir))
 from config.default_config import get_config
 from graph.trading_graph import AStockTradingGraph
 from dataflows.akshare_adapter import get_latest_trade_date
+from dataflows.market_cache import MarketDataCache
 
 # ============================================================
 # 股票列表: ~110支 (光伏25 + 风电20 + AI 25 + 储能20 + 视觉20)
@@ -244,6 +245,15 @@ def main():
     print("初始化 AStockAgent...")
     agent = AStockTradingGraph(config=config, debug=False)
     print("OK\n")
+
+    # ———— 预加载市场公共数据到缓存 ————
+    cache = MarketDataCache.get_instance()
+    cache.set_trade_date(TRADE_DATE)
+    print("📦 预加载市场公共数据...")
+    preload_status = cache.preload()
+    for method, status in preload_status.items():
+        print(f"  {status} {method}")
+    print()
 
     results = []
     success_count = 0

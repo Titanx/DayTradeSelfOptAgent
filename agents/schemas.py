@@ -1,0 +1,203 @@
+"""
+Schema 定义 — Agent 结构化输出的 Pydantic 模型
+
+借鉴 TradingAgents 的设计：结构化输出 + Markdown 渲染双通道。
+"""
+
+from enum import Enum
+from typing import Optional, List
+from pydantic import BaseModel, Field
+
+
+# ============================================================
+# 评级枚举
+# ============================================================
+
+class PortfolioRating(str, Enum):
+    BUY = "Buy"
+    OVERWEIGHT = "Overweight"
+    HOLD = "Hold"
+    UNDERWEIGHT = "Underweight"
+    SELL = "Sell"
+
+
+class TraderAction(str, Enum):
+    BUY = "Buy"
+    HOLD = "Hold"
+    SELL = "Sell"
+
+
+class SentimentBand(str, Enum):
+    VERY_BULLISH = "Very Bullish"
+    BULLISH = "Bullish"
+    SLIGHTLY_BULLISH = "Slightly Bullish"
+    NEUTRAL = "Neutral"
+    SLIGHTLY_BEARISH = "Slightly Bearish"
+    BEARISH = "Bearish"
+
+
+# ============================================================
+# 分析师输出
+# ============================================================
+
+class FundamentalReport(BaseModel):
+    """基本面分析报告"""
+    rating: PortfolioRating = Field(description="基于基本面的评级")
+    roe: Optional[float] = Field(None, description="净资产收益率")
+    revenue_growth: Optional[float] = Field(None, description="营收增长率")
+    pe_ttm: Optional[float] = Field(None, description="市盈率TTM")
+    key_strengths: List[str] = Field(default_factory=list, description="核心优势")
+    key_risks: List[str] = Field(default_factory=list, description="主要风险")
+    summary: str = Field(description="分析总结")
+
+
+class TechnicalReport(BaseModel):
+    """技术面分析报告"""
+    rating: PortfolioRating = Field(description="基于技术面的评级")
+    trend: str = Field(description="趋势判断：上涨/下跌/震荡")
+    key_signals: List[str] = Field(default_factory=list, description="关键技术信号")
+    support_level: Optional[float] = Field(None, description="支撑位")
+    resistance_level: Optional[float] = Field(None, description="阻力位")
+    summary: str = Field(description="技术分析总结")
+
+
+class SentimentReport(BaseModel):
+    """舆论情绪分析报告"""
+    rating: PortfolioRating = Field(description="基于舆论情绪的评级")
+    sentiment_band: SentimentBand = Field(description="情绪区间")
+    sentiment_score: float = Field(ge=-1, le=1, description="情绪评分")
+    key_narratives: List[str] = Field(default_factory=list, description="核心市场叙事")
+    risk_signals: List[str] = Field(default_factory=list, description="风险信号")
+    summary: str = Field(description="情绪分析总结")
+
+
+class PolicyReport(BaseModel):
+    """政策/宏观分析报告（A股特色）"""
+    rating: PortfolioRating = Field(description="基于政策面的评级")
+    policy_impact: str = Field(description="政策影响：利好/利空/中性")
+    key_policies: List[str] = Field(default_factory=list, description="关键政策/事件")
+    sector_rotation_hint: Optional[str] = Field(None, description="板块轮动提示")
+    summary: str = Field(description="政策分析总结")
+
+
+# ============================================================
+# 研究员/交易员输出
+# ============================================================
+
+class ResearchPlan(BaseModel):
+    """研究员投资计划"""
+    rating: PortfolioRating = Field(description="投资评级")
+    thesis: str = Field(description="投资核心逻辑")
+    catalysts: List[str] = Field(default_factory=list, description="催化剂事件")
+    risks: List[str] = Field(default_factory=list, description="风险提示")
+    timeframe: str = Field(default="短期(1-4周)", description="投资时间框架")
+
+
+class TraderProposal(BaseModel):
+    """交易员提案"""
+    action: TraderAction = Field(description="交易动作")
+    position_pct: Optional[float] = Field(None, ge=0, le=1, description="仓位比例")
+    entry_price: Optional[float] = Field(None, description="建议入场价")
+    stop_loss: Optional[float] = Field(None, description="止损价")
+    take_profit: Optional[float] = Field(None, description="止盈价")
+    reasoning: str = Field(description="交易逻辑")
+
+
+class PortfolioDecision(BaseModel):
+    """最终投资决策"""
+    rating: PortfolioRating = Field(description="最终评级")
+    action: TraderAction = Field(description="最终动作")
+    position_pct: Optional[float] = Field(None, ge=0, le=1, description="建议仓位")
+    confidence: float = Field(ge=0, le=1, description="决策信心度")
+    executive_summary: str = Field(description="执行摘要")
+    investment_thesis: str = Field(description="投资论题")
+    key_risks: List[str] = Field(default_factory=list, description="关键风险")
+
+
+# ============================================================
+# Markdown 渲染函数
+# ============================================================
+
+def render_fundamental_report(report: FundamentalReport) -> str:
+    return f"""**Rating**: {report.rating.value}
+
+**Key Metrics**:
+- ROE: {report.roe if report.roe else 'N/A'}
+- Revenue Growth: {report.revenue_growth if report.revenue_growth else 'N/A'}
+- PE(TTM): {report.pe_ttm if report.pe_ttm else 'N/A'}
+
+**Strengths**: {', '.join(report.key_strengths) if report.key_strengths else 'N/A'}
+**Risks**: {', '.join(report.key_risks) if report.key_risks else 'N/A'}
+
+**Summary**: {report.summary}"""
+
+
+def render_technical_report(report: TechnicalReport) -> str:
+    return f"""**Rating**: {report.rating.value}
+
+**Trend**: {report.trend}
+**Support**: {report.support_level if report.support_level else 'N/A'}
+**Resistance**: {report.resistance_level if report.resistance_level else 'N/A'}
+
+**Key Signals**: {', '.join(report.key_signals) if report.key_signals else 'N/A'}
+
+**Summary**: {report.summary}"""
+
+
+def render_sentiment_report(report: SentimentReport) -> str:
+    return f"""**Rating**: {report.rating.value}
+
+**Sentiment**: {report.sentiment_band.value} (Score: {report.sentiment_score:+.2f})
+
+**Market Narratives**: {', '.join(report.key_narratives) if report.key_narratives else 'N/A'}
+**Risk Signals**: {', '.join(report.risk_signals) if report.risk_signals else 'None'}
+
+**Summary**: {report.summary}"""
+
+
+def render_policy_report(report: PolicyReport) -> str:
+    return f"""**Rating**: {report.rating.value}
+
+**Policy Impact**: {report.policy_impact}
+**Key Policies**: {', '.join(report.key_policies) if report.key_policies else 'N/A'}
+**Sector Rotation**: {report.sector_rotation_hint if report.sector_rotation_hint else 'N/A'}
+
+**Summary**: {report.summary}"""
+
+
+def render_research_plan(plan: ResearchPlan) -> str:
+    return f"""**Rating**: {plan.rating.value}
+
+**Investment Thesis**: {plan.thesis}
+**Catalysts**: {', '.join(plan.catalysts) if plan.catalysts else 'N/A'}
+**Risks**: {', '.join(plan.risks) if plan.risks else 'N/A'}
+**Timeframe**: {plan.timeframe}"""
+
+
+def render_trader_proposal(proposal: TraderProposal) -> str:
+    lines = [f"**Action**: {proposal.action.value}"]
+    if proposal.position_pct is not None:
+        lines.append(f"**Position**: {proposal.position_pct:.0%}")
+    if proposal.entry_price is not None:
+        lines.append(f"**Entry Price**: {proposal.entry_price:.2f}")
+    if proposal.stop_loss is not None:
+        lines.append(f"**Stop Loss**: {proposal.stop_loss:.2f}")
+    if proposal.take_profit is not None:
+        lines.append(f"**Take Profit**: {proposal.take_profit:.2f}")
+    lines.append(f"\n**Reasoning**: {proposal.reasoning}")
+    return "\n".join(lines)
+
+
+def render_portfolio_decision(decision: PortfolioDecision) -> str:
+    lines = [
+        f"**Rating**: {decision.rating.value}",
+        f"**Action**: {decision.action.value}",
+        f"**Confidence**: {decision.confidence:.0%}",
+    ]
+    if decision.position_pct is not None:
+        lines.append(f"**Position**: {decision.position_pct:.0%}")
+    lines.append(f"\n**Executive Summary**: {decision.executive_summary}")
+    lines.append(f"\n**Investment Thesis**: {decision.investment_thesis}")
+    if decision.key_risks:
+        lines.append(f"\n**Key Risks**: {', '.join(decision.key_risks)}")
+    return "\n".join(lines)

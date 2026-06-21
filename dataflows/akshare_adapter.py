@@ -1,0 +1,479 @@
+"""
+AKShare A股数据适配器
+
+提供 A股行情、财务数据、技术指标、资金流向、市场情绪等数据接口。
+AKShare 是免费开源库，无需 API Key，数据源来自东方财富、新浪财经等。
+"""
+
+import pandas as pd
+import numpy as np
+from typing import Optional, Dict, List, Any
+from datetime import datetime, timedelta
+import functools
+import logging
+
+logger = logging.getLogger(__name__)
+
+
+def _safe_akshare_call(func):
+    """安全调用包装器：捕获 AKShare 的错误并返回友好消息"""
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        try:
+            return func(*args, **kwargs)
+        except Exception as e:
+            logger.error(f"AKShare调用失败 [{func.__name__}]: {e}")
+            return None
+    return wrapper
+
+
+# ============================================================
+# 工具函数
+# ============================================================
+
+def get_latest_trade_date() -> str:
+    """
+    获取最近一个A股交易日日期 (YYYY-MM-DD)。
+
+    逻辑：通过获取上证指数最近K线，取最后一天作为最近交易日。
+    如果获取失败，则回退到排除周末的最近工作日。
+    """
+    try:
+        import akshare as ak
+        df = ak.stock_zh_index_daily(symbol="sh000001")
+        if df is not None and not df.empty:
+            last_date = pd.to_datetime(df.iloc[-1]["date"])
+            return last_date.strftime("%Y-%m-%d")
+    except Exception:
+        pass
+
+    # 回退：排除周末，往前找最近工作日
+    today = datetime.now()
+    if today.weekday() == 5:  # 周六
+        today -= timedelta(days=1)
+    elif today.weekday() == 6:  # 周日
+        today -= timedelta(days=2)
+    return today.strftime("%Y-%m-%d")
+
+
+# ============================================================
+# 行情数据
+# ============================================================
+
+@_safe_akshare_call
+def get_stock_daily(symbol: str, start_date: str = None, end_date: str = None,
+                    adjust: str = "") -> Optional[pd.DataFrame]:
+    """
+    获取A股日线行情数据（新浪源，避免 push2.eastmoney.com 被阻断）
+
+    Args:
+        symbol: 股票代码，如 "000001" (平安银行), "600519" (贵州茅台)
+        start_date: 起始日期 "YYYYMMDD"，默认最近1年
+        end_date: 结束日期 "YYYYMMDD"，默认今天
+        adjust: 复权方式 ""=不复权 / "qfq"=前复权 / "hfq"=后复权
+
+    Returns:
+        DataFrame with columns: date, open, high, low, close, volume, amount, ...
+    """
+    import akshare as ak
+
+    if start_date is None:
+        start_date = (datetime.now() - timedelta(days=365)).strftime("%Y%m%d")
+    if end_date is None:
+        end_date = datetime.now().strftime("%Y%m%d")
+
+    # 优先使用东方财富源（部分网络环境可用）
+    try:
+        df = ak.stock_zh_a_hist(
+            symbol=symbol, period="daily",
+            start_date=start_date, end_date=end_date, adjust=adjust or "qfq"
+        )
+        if df is not None and not df.empty:
+            col_map = {
+                "日期": "date", "开盘": "open", "收盘": "close",
+                "最高": "high", "最低": "low", "成交量": "volume",
+                "成交额": "amount", "振幅": "amplitude", "涨跌幅": "pct_change",
+                "涨跌额": "change", "换手率": "turnover_rate"
+            }
+            df = df.rename(columns={k: v for k, v in col_map.items() if k in df.columns})
+            df["date"] = pd.to_datetime(df["date"])
+            df = df.sort_values("date")
+            return df
+    except Exception:
+        pass
+
+    # 回退到新浪源 (需要 sh/sz 前缀)
+    prefix = "sh" if symbol.startswith(("6", "9")) else "sz"
+    try:
+        df = ak.stock_zh_a_daily(
+            symbol=f"{prefix}{symbol}",
+            start_date=start_date, end_date=end_date, adjust=adjust or "qfq"
+        )
+        if df is not None and not df.empty and "date" in df.columns:
+            df["date"] = pd.to_datetime(df["date"])
+            df = df.sort_values("date")
+            return df
+    except Exception:
+        pass
+
+    # 最后尝试腾讯源
+    try:
+        df = ak.stock_zh_a_hist_tx(
+            symbol=symbol, start_date=start_date, end_date=end_date
+        )
+        if df is not None and not df.empty:
+            if "交易日" in df.columns:
+                df = df.rename(columns={
+                    "交易日": "date", "开盘价": "open", "收盘价": "close",
+                    "最高价": "high", "最低价": "low", "成交量(股)": "volume"
+                })
+            if "date" in df.columns:
+                df["date"] = pd.to_datetime(df["date"])
+                df = df.sort_values("date")
+                return df
+    except Exception:
+        pass
+
+    return None
+
+
+@_safe_akshare_call
+def get_stock_realtime(symbol: str) -> Optional[Dict[str, Any]]:
+    """
+    获取A股实时行情快照（多源回退）
+
+    Args:
+        symbol: 股票代码
+
+    Returns:
+        dict with: name, price, change_pct, volume, high, low, open, pre_close
+    """
+    import akshare as ak
+
+    # 1. 尝试东方财富源
+    try:
+        df = ak.stock_zh_a_spot_em()
+        if df is not None and not df.empty:
+            row = df[df["代码"] == symbol]
+            if not row.empty:
+                row = row.iloc[0]
+                return {
+                    "symbol": symbol,
+                    "name": row.get("名称", ""),
+                    "price": float(row.get("最新价", 0)),
+                    "change_pct": float(row.get("涨跌幅", 0)),
+                    "change": float(row.get("涨跌额", 0)),
+                    "volume": int(row.get("成交量", 0)),
+                    "amount": float(row.get("成交额", 0)),
+                    "high": float(row.get("最高", 0)),
+                    "low": float(row.get("最低", 0)),
+                    "open": float(row.get("今开", 0)),
+                    "pre_close": float(row.get("昨收", 0)),
+                    "turnover_rate": float(row.get("换手率", 0)) if "换手率" in row else None,
+                    "pe": float(row.get("市盈率-动态", 0)) if "市盈率-动态" in row else None,
+                    "total_mv": float(row.get("总市值", 0)) if "总市值" in row else None,
+                    "circ_mv": float(row.get("流通市值", 0)) if "流通市值" in row else None,
+                }
+    except Exception:
+        pass
+
+    # 2. 尝试腾讯源实时行情
+    try:
+        prefix = "sh" if symbol.startswith(("6", "9")) else "sz"
+        df = ak.stock_zh_a_spot()
+        if df is not None and not df.empty:
+            row = df[df["代码"] == symbol]
+            if not row.empty:
+                row = row.iloc[0]
+                return {
+                    "symbol": symbol,
+                    "name": str(row.get("名称", "")),
+                    "price": float(row.get("最新价", 0) or 0),
+                    "change_pct": float(row.get("涨跌幅", 0) or 0),
+                    "change": float(row.get("涨跌额", 0) or 0),
+                    "volume": int(float(row.get("成交量", 0) or 0)),
+                    "amount": float(row.get("成交额", 0) or 0),
+                    "high": float(row.get("最高", 0) or 0),
+                    "low": float(row.get("最低", 0) or 0),
+                    "open": float(row.get("今开", 0) or 0),
+                    "pre_close": float(row.get("昨收", 0) or 0),
+                }
+    except Exception:
+        pass
+
+    # 3. 从个股日K线取最近一天数据作为替代
+    try:
+        prefix = "sh" if symbol.startswith(("6", "9")) else "sz"
+        df = ak.stock_zh_a_daily(
+            symbol=f"{prefix}{symbol}",
+            start_date=(datetime.now() - timedelta(days=7)).strftime("%Y%m%d"),
+            end_date=datetime.now().strftime("%Y%m%d"),
+            adjust="qfq"
+        )
+        if df is not None and not df.empty and "date" in df.columns:
+            last = df.iloc[-1]
+            return {
+                "symbol": symbol,
+                "name": "",
+                "price": float(last.get("close", 0)),
+                "change_pct": float(last.get("pct_change", 0) or 0),
+                "change": float(last.get("change", 0) or 0),
+                "volume": int(float(last.get("volume", 0) or 0)),
+                "amount": float(last.get("amount", 0) or 0),
+                "high": float(last.get("high", 0) or 0),
+                "low": float(last.get("low", 0) or 0),
+                "open": float(last.get("open", 0) or 0),
+                "pre_close": float(last.get("close", 0)) * (1 - float(last.get("pct_change", 0) or 0) / 100) if float(last.get("pct_change", 0) or 0) else float(last.get("close", 0)),
+            }
+    except Exception:
+        pass
+
+    return None
+
+
+# ============================================================
+# 财务数据
+# ============================================================
+
+@_safe_akshare_call
+def get_financial_data(symbol: str) -> Optional[Dict[str, pd.DataFrame]]:
+    """
+    获取A股财务数据（资产负债表、利润表、现金流量表）
+
+    Returns:
+        {"balance": DataFrame, "income": DataFrame, "cashflow": DataFrame}
+    """
+    import akshare as ak
+
+    result = {}
+
+    try:
+        result["balance"] = ak.stock_financial_balance_sheet_by_report_em(symbol=symbol)
+    except Exception:
+        result["balance"] = None
+
+    try:
+        result["income"] = ak.stock_financial_profit_by_report_em(symbol=symbol)
+    except Exception:
+        result["income"] = None
+
+    try:
+        result["cashflow"] = ak.stock_financial_cash_flow_by_report_em(symbol=symbol)
+    except Exception:
+        result["cashflow"] = None
+
+    return result
+
+
+@_safe_akshare_call
+def get_financial_indicators(symbol: str) -> Optional[pd.DataFrame]:
+    """
+    获取财务指标（ROE、ROA、毛利率、净利率等）
+
+    Returns:
+        DataFrame with 报告期 as index, indicators as columns
+    """
+    import akshare as ak
+    return ak.stock_financial_abstract_ths(symbol=symbol)
+
+
+# ============================================================
+# 资金流向
+# ============================================================
+
+@_safe_akshare_call
+def get_money_flow(symbol: str, days: int = 20) -> Optional[pd.DataFrame]:
+    """
+    获取个股资金流向（主力/超大单/大单/中单/小单）
+
+    Args:
+        symbol: 股票代码
+        days: 获取天数
+
+    Returns:
+        DataFrame
+    """
+    import akshare as ak
+    df = ak.stock_individual_fund_flow(stock=symbol, market="sh" if symbol.startswith("6") else "sz")
+    if df is not None and not df.empty:
+        df["日期"] = pd.to_datetime(df["日期"])
+        df = df.sort_values("日期").tail(days)
+    return df
+
+
+@_safe_akshare_call
+def get_north_flow(days: int = 10) -> Optional[pd.DataFrame]:
+    """
+    获取北向资金流向
+
+    Args:
+        days: 获取天数
+
+    Returns:
+        DataFrame with columns: 日期, 当日成交净买额(亿), 买入成交额, 卖出成交额
+    """
+    import akshare as ak
+    df = ak.stock_hsgt_hist_em(symbol="沪股通")
+    if df is not None and not df.empty:
+        cols = {"日期": "date", "当日成交净买额": "net_buy", "买入成交额": "buy_amount",
+                "卖出成交额": "sell_amount", "持股市值": "holding_value"}
+        df = df.rename(columns={k: v for k, v in cols.items() if k in df.columns})
+        df["date"] = pd.to_datetime(df["date"])
+        df = df.sort_values("date").tail(days)
+        return df
+    return None
+
+
+# ============================================================
+# 板块/行业数据
+# ============================================================
+
+@_safe_akshare_call
+def get_sector_boards() -> Optional[pd.DataFrame]:
+    """获取行业板块涨跌排行（东方财富源优先，同花顺源回退）"""
+    import akshare as ak
+    try:
+        return ak.stock_board_industry_spot_em()
+    except Exception:
+        pass
+    try:
+        return ak.stock_board_industry_summary_ths()
+    except Exception:
+        pass
+    return None
+
+
+@_safe_akshare_call
+def get_concept_boards() -> Optional[pd.DataFrame]:
+    """获取概念板块涨跌排行（东方财富源优先，同花顺源回退）"""
+    import akshare as ak
+    try:
+        return ak.stock_board_concept_spot_em()
+    except Exception:
+        pass
+    try:
+        return ak.stock_board_concept_cons_ths()
+    except Exception:
+        pass
+    return None
+
+
+# ============================================================
+# 市场情绪指标
+# ============================================================
+
+@_safe_akshare_call
+def get_market_sentiment() -> Optional[Dict[str, Any]]:
+    """
+    获取A股市场整体情绪指标
+    包括：涨跌家数、涨停跌停数、市场总成交额等
+    """
+    import akshare as ak
+
+    result = {}
+
+    # 涨跌家数统计 (优先使用乐咕乐股源)
+    try:
+        df = ak.stock_market_activity_legu()
+        if df is not None and not df.empty:
+            # 乐咕乐股返回格式: item / number
+            legu_map = {}
+            for _, row in df.iterrows():
+                key = str(row.iloc[0]).strip()
+                try:
+                    val = int(float(row.iloc[1]))
+                except (ValueError, TypeError):
+                    val = 0
+                legu_map[key] = val
+            result["up_count"] = legu_map.get("上涨", 0)
+            result["down_count"] = legu_map.get("下跌", 0)
+            result["flat_count"] = legu_map.get("平盘", 0)
+            result["limit_up"] = legu_map.get("涨停", 0)
+            result["limit_down"] = legu_map.get("跌停", 0)
+    except Exception:
+        pass
+
+    # 如果乐咕没有拿到涨跌数据，回退到新浪个股列表
+    if result.get("up_count", 0) == 0 and result.get("down_count", 0) == 0:
+        try:
+            df = ak.stock_zh_a_spot()
+            if df is not None and not df.empty:
+                pct_col = None
+                for c in df.columns:
+                    if "涨跌" in str(c) and "幅" in str(c):
+                        pct_col = c
+                        break
+                if pct_col:
+                    result["up_count"] = int((df[pct_col] > 0).sum())
+                    result["down_count"] = int((df[pct_col] < 0).sum())
+                    result["flat_count"] = int((df[pct_col] == 0).sum())
+                    result["limit_up"] = int((df[pct_col] >= 9.9).sum())
+                    result["limit_down"] = int((df[pct_col] <= -9.9).sum())
+        except Exception:
+            pass
+
+    # 恐慌指数（涨跌比）
+    if result.get("down_count", 0) > 0:
+        result["advance_decline_ratio"] = round(
+            result["up_count"] / result["down_count"], 2
+        )
+    else:
+        result["advance_decline_ratio"] = None
+
+    return result
+
+
+# ============================================================
+# 指数数据
+# ============================================================
+
+@_safe_akshare_call
+def get_index_daily(symbol: str, start_date: str = None,
+                    end_date: str = None) -> Optional[pd.DataFrame]:
+    """
+    获取指数日线数据
+
+    Args:
+        symbol: 指数代码，如 "000300" (沪深300), "000001" (上证指数)
+    """
+    import akshare as ak
+
+    if start_date is None:
+        start_date = (datetime.now() - timedelta(days=365)).strftime("%Y%m%d")
+    if end_date is None:
+        end_date = datetime.now().strftime("%Y%m%d")
+
+    df = ak.stock_zh_index_daily_em(symbol=symbol)
+    if df is not None and not df.empty:
+        df["日期"] = pd.to_datetime(df["date"] if "date" in df.columns else df["日期"])
+        df = df[(df["日期"] >= start_date) & (df["日期"] <= end_date)]
+        df = df.sort_values("日期")
+    return df
+
+
+# ============================================================
+# 公告与新闻
+# ============================================================
+
+@_safe_akshare_call
+def get_stock_notices(symbol: str, limit: int = 20) -> Optional[List[Dict]]:
+    """获取个股公告"""
+    import akshare as ak
+    df = ak.stock_notice_report(symbol=symbol)
+    if df is not None and not df.empty:
+        df = df.head(limit)
+        return df.to_dict(orient="records")
+    return []
+
+
+@_safe_akshare_call
+def get_cn_stock_news(symbol: str, limit: int = 20) -> Optional[List[Dict]]:
+    """获取个股相关新闻（东方财富来源）"""
+    import akshare as ak
+    try:
+        df = ak.stock_news_em(symbol=symbol)
+        if df is not None and not df.empty:
+            return df.head(limit).to_dict(orient="records")
+    except Exception:
+        pass
+    return []

@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# 敏感信息
+.env
+.env.local
+run.bat
+
+# 分析结果 (数据量大，本地生成即可)
+results/
+
+# 临时/缓存
+*.log
+.astock_agent/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo

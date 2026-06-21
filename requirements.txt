@@ -1,0 +1,10 @@
+pydantic>=2.0
+langchain-core>=0.3
+langgraph>=0.2
+langchain-openai>=0.2
+akshare>=1.14
+stockstats
+pandas
+numpy
+python-dotenv
+httpx

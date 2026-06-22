@@ -72,6 +72,7 @@ DEFAULT_CONFIG = {
     "one_day_swing": {
         "holding_days": 1,               # 持有 1 个交易日
         "exit_rule": "forced_close",     # Day 2 收盘前强制平仓
+        "target_gain_pct": 1.0,          # 目标涨幅 ≥1%（扣除 0.11% 成本后净利约 0.89%）
         "min_daily_amount_yuan": 1e8,    # 最小日成交额: 1 亿元 (流动性门槛)
         "max_recent_gain_pct": 15,       # 近 5 日最大涨幅: 15% (追高过滤)
         "ban_st_stocks": True,           # 禁止 ST 股票

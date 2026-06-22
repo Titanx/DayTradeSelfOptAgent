@@ -216,12 +216,13 @@ def main():
     config["max_risk_discuss_rounds"] = 2  # 风险辩论 2 轮，确保评级差异化
     config["enable_opinion_monitor"] = True
 
-    # 跳过已有结果的股票
+    # 跳过已有结果的股票（仅跳过当天已分析的）
+    today_prefix = TRADE_DATE.replace("-", "")
     todo = []
     skipped = []
     for code, name, sector in STOCKS:
         dir = RESULTS_BASE / code
-        if dir.exists() and any(f.endswith('_analysis.md') for f in os.listdir(dir) if not f.startswith('_')):
+        if dir.exists() and any(f.startswith(today_prefix) and f.endswith('_analysis.md') for f in os.listdir(dir)):
             skipped.append(f"{name}({code})")
         else:
             todo.append((code, name, sector))

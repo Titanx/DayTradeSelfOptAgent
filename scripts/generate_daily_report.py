@@ -6,10 +6,23 @@ from datetime import datetime
 
 PROJ = Path(__file__).parent.parent
 results_dir = PROJ / "data" / "results"
-files = sorted(results_dir.glob("*_analysis.cache.json"))
-if not files:
+all_files = sorted(results_dir.glob("*_analysis.cache.json"))
+if not all_files:
     print("无结果文件")
     exit(1)
+
+# 取最新日期的结果
+dates = set()
+for f in all_files:
+    try:
+        d = json.loads(f.read_text(encoding="utf-8"))
+        dates.add(d.get("trade_date", ""))
+    except Exception:
+        pass
+latest_date = max(dates) if dates else ""
+files = [f for f in all_files if latest_date in f.stem]
+if not files:
+    files = all_files
 
 # ---------- 板块映射 ----------
 SYMBOL_SECTOR = {

@@ -36,14 +36,17 @@ def get_latest_trade_date() -> str:
     获取最近一个A股交易日日期 (YYYY-MM-DD)。
 
     逻辑：通过获取上证指数最近K线，取最后一天作为最近交易日。
-    如果获取失败，则回退到排除周末的最近工作日。
+    如果获取失败，或返回日期距今超过3个自然日，则回退到排除周末的最近工作日。
     """
     try:
         import akshare as ak
         df = ak.stock_zh_index_daily(symbol="sh000001")
         if df is not None and not df.empty:
             last_date = pd.to_datetime(df.iloc[-1]["date"])
-            return last_date.strftime("%Y-%m-%d")
+            trade_date = last_date.strftime("%Y-%m-%d")
+            # 如果数据距今超过3天，可能是源端未更新，回退到工作日
+            if (datetime.now() - last_date).days <= 3:
+                return trade_date
     except Exception:
         pass
 

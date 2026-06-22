@@ -1,8 +1,24 @@
 # AStockAgent
 
-基于数据和舆论监控的 A 股量化交易多智能体系统。
+基于数据和舆论监控的 A 股量化交易多智能体系统。**策略模式：一日游超短线**。
 
 > ⚠️ **免责声明**: 本项目仅供学习研究使用，所有分析结果均不构成任何投资建议。股市有风险，投资需谨慎。
+
+## 策略说明：一日游 (One-Day Swing)
+
+本系统实现的是「一日游」超短线策略，交易节奏为 2 天周期：
+
+```
+Day 0 (收盘后)  →  多 Agent 分析评估  →  决定 Day 1 是否买入
+Day 1 (次日)    →  开盘买入（如果决策为 Buy/Overweight）
+Day 2 (第三日)  →  收盘前强制平仓，无论盈亏
+```
+
+**硬约束**：
+- 只做多，不做空（策略无卖单）
+- 单只股票仓位 ≤ 30%
+- Day 2 必须卖出，持有仅 1 个交易日
+- 流动性过滤：日成交额 ≥ 1 亿，禁止 ST 股票，回避跌停/停牌风险
 
 ## 参考项目
 
@@ -37,8 +53,8 @@
        │
        ▼
 ┌─────────────────────────────────────┐
-│         第三阶段：交易决策            │
-│         Trader（A股 T+1 规则）        │
+│         第三阶段：一日游交易决策        │
+│         Trader（Day1买入 Day2强制平仓）  │
 └─────────────────────────────────────┘
        │
        ▼
@@ -46,11 +62,12 @@
 │         第四阶段：风控讨论            │
 │  Aggressive ⟷ Conservative ⟷ Neutral │
 │              ↓                       │
-│       Portfolio Manager 最终评级      │
+│       Portfolio Manager 最终决策      │
+│    Buy=Day1买入 / Hold=不参与        │
 └─────────────────────────────────────┘
        │
        ▼
-  最终输出：评级 + 行动计划 + 置信度 + 辩论轨迹
+  最终输出：Buy/Hold 决策 + 信心度 + 辩论轨迹
 ```
 
 ## 快速开始
@@ -132,11 +149,11 @@ AStockAgent/
 │   │   └── policy_analyst.py        # 政策面 (板块/北向/情绪)
 │   ├── researchers/          # 多空研究员
 │   │   └── bull_researcher.py       # 多方+空方+研究管理三位一体
-│   ├── risk_mgmt.py          # 风控讨论 + 投资经理终决
-│   ├── trader.py             # 交易员（A股 T+1 规则）
-│   ├── schemas.py            # Pydantic 数据模型
+│   ├── risk_mgmt.py          # 风控讨论 + 投资经理终决 (一日游决策)
+│   ├── trader.py             # 一日游交易员（Day1买入 Day2平仓）
+│   ├── schemas.py            # Pydantic 数据模型 (一日游策略专用)
 │   └── utils/
-│       ├── agent_utils.py    # 工具函数 (个股数据/市场数据/舆论)
+│       ├── agent_utils.py    # 工具函数 (行情/财务/舆论/流动性)
 │       ├── md_utils.py       # Markdown 渲染 (to_markdown)
 │       └── memory.py         # 交易记忆系统
 ├── dataflows/
@@ -229,7 +246,8 @@ data/
 - **Markdown 输出** — 所有数据/结果/报告统一 MD 格式，人类直接可读
 - **舆论监控** — 雪球热门帖子、微博情绪、财经新闻聚合
 - **差异化评级** — Overweight / Hold / Underweight + 置信度
-- **T+1 交易规则** — 完全符合 A 股交易制度
+- **T+2 一日游策略** — Day0盘后分析 → Day1开盘买入 → Day2收盘强制平仓
+- **流动性安全检查** — 自动检测 ST/停牌/跌停/成交额，硬过滤不合格标的
 - **非交易日处理** — 自动回退到最近交易日数据
 - **批量分析报告** — 一键生成 25 只股票板块热力图 + 投资逻辑汇总
 
@@ -248,19 +266,20 @@ data/
      ├─ 💬 情绪面: 雪球帖子+行情 / 东财新闻 / 微博 (JinaReader)
      └─ 🏛️ 政策面: 板块动量 / 北向资金 / 市场情绪
 
-[3] 多空辩论 (3 轮)
-     ├─ 📈 Bull Researcher: 多方论点
-     ├─ 📉 Bear Researcher: 空方反驳
-     └─ Research Manager: 辩论裁决
+[3] 多空辩论 (聚焦 24h 维度)
+     ├─ 📈 Bull Researcher: Day1上涨逻辑（超跌反弹/涨停惯性/尾盘异动）
+     ├─ 📉 Bear Researcher: 一日游风险（追高/跌停/流动性/隔夜）
+     └─ Research Manager: 明日涨跌概率裁决
 
-[4] 交易决策
-     └─ Trader: 生成交易计划 (基于 A 股 T+1 规则)
+[4] 一日游交易决策
+     ├─ 🔍 流动性检查: ST/停牌/跌停/成交额 (硬过滤)
+     └─ Trader: Buy(Day1买入) or Hold(不参与)
 
-[5] 风险讨论 (3 轮)
-     ├─ 🔥 Aggressive: 激进派观点
-     ├─ 🛡️ Conservative: 保守派观点
-     ├─ ⚖️ Neutral: 中性派观点
-     └─ Portfolio Manager: 最终评级 (Overweight/Hold/Underweight)
+[5] 风险讨论 (聚焦 Day2 能否顺利卖出)
+     ├─ 🔥 Aggressive: 24h 持有期风险极低，超短线不需止损
+     ├─ 🛡️ Conservative: Day2跌停/停牌=策略完全失效
+     ├─ ⚖️ Neutral: 概率加权风险评估
+     └─ Portfolio Manager: Buy(Day1买入,信心度) or Hold(不参与)
 
 [6] 输出保存
      ├─ results/: 分析结果 (MD + JSON)

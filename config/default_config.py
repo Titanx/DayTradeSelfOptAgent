@@ -67,6 +67,17 @@ DEFAULT_CONFIG = {
     "take_profit_pct": 0.20,            # 止盈线 20%
     "holding_period_days": 5,            # 默认持仓天数
 
+    # --- 一日游策略参数 (One-Day Swing) ---
+    "strategy_mode": "one_day_swing",    # 策略模式: one_day_swing (默认)
+    "one_day_swing": {
+        "holding_days": 1,               # 持有 1 个交易日
+        "exit_rule": "forced_close",     # Day 2 收盘前强制平仓
+        "min_daily_amount_yuan": 1e8,    # 最小日成交额: 1 亿元 (流动性门槛)
+        "max_recent_gain_pct": 15,       # 近 5 日最大涨幅: 15% (追高过滤)
+        "ban_st_stocks": True,           # 禁止 ST 股票
+        "max_position_pct": 0.3,         # 单票仓位上限
+    },
+
     # --- 基准指数 ---
     "benchmark_ticker": "000300",        # 默认沪深300
     "benchmark_map": {

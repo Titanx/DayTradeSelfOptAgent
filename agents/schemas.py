@@ -87,31 +87,31 @@ class PolicyReport(BaseModel):
 class ResearchPlan(BaseModel):
     """研究员投资计划"""
     rating: PortfolioRating = Field(description="投资评级")
-    thesis: str = Field(description="投资核心逻辑")
-    catalysts: List[str] = Field(default_factory=list, description="催化剂事件")
-    risks: List[str] = Field(default_factory=list, description="风险提示")
-    timeframe: str = Field(default="短期(1-4周)", description="投资时间框架")
+    thesis: str = Field(description="投资核心逻辑（聚焦次日一日游机会）")
+    catalysts: List[str] = Field(default_factory=list, description="次日催化剂事件")
+    risks: List[str] = Field(default_factory=list, description="一日持有期内的风险")
+    timeframe: str = Field(default="一日游(Day1买入→Day2强制卖出)", description="固定一日游策略")
 
 
 class TraderProposal(BaseModel):
-    """交易员提案"""
-    action: TraderAction = Field(description="交易动作")
-    position_pct: Optional[float] = Field(None, ge=0, le=1, description="仓位比例")
-    entry_price: Optional[float] = Field(None, description="建议入场价")
-    stop_loss: Optional[float] = Field(None, description="止损价")
-    take_profit: Optional[float] = Field(None, description="止盈价")
-    reasoning: str = Field(description="交易逻辑")
+    """交易员提案 — 一日游策略专用"""
+    action: TraderAction = Field(description="交易动作: Buy=Day1开盘买入 / Hold=观望 / Sell=(策略不出卖单)")
+    position_pct: Optional[float] = Field(None, ge=0, le=0.3, description="仓位比例 (单股≤30%)")
+    entry_signal: Optional[str] = Field(None, description="Day1入场信号条件")
+    day1_upside_catalyst: Optional[str] = Field(None, description="看好Day1上涨的具体理由")
+    day2_forced_exit_note: str = Field(default="无论盈亏，Day2收盘前强制平仓", description="强制平仓说明")
+    reasoning: str = Field(description="一日游交易逻辑")
 
 
 class PortfolioDecision(BaseModel):
-    """最终投资决策"""
-    rating: PortfolioRating = Field(description="最终评级")
-    action: TraderAction = Field(description="最终动作")
-    position_pct: Optional[float] = Field(None, ge=0, le=1, description="建议仓位")
-    confidence: float = Field(ge=0, le=1, description="决策信心度")
-    executive_summary: str = Field(description="执行摘要")
-    investment_thesis: str = Field(description="投资论题")
-    key_risks: List[str] = Field(default_factory=list, description="关键风险")
+    """最终投资决策 — 一日游策略"""
+    rating: PortfolioRating = Field(description="最终评级 (Day1是否值得买入)")
+    action: TraderAction = Field(description="最终动作: Buy=Day1开盘买入/Hold=观望")
+    position_pct: Optional[float] = Field(None, ge=0, le=0.3, description="建议仓位")
+    confidence: float = Field(ge=0, le=1, description="决策信心度 (Day1上涨概率)")
+    executive_summary: str = Field(description="一日游执行摘要: Day1买入理由 + Day2卖出规则")
+    investment_thesis: str = Field(description="看多核心论题 (为什么Day1会涨)")
+    key_risks: List[str] = Field(default_factory=list, description="24小时内主要风险 (隔夜/盘中/流动性)")
 
 
 # ============================================================
@@ -178,12 +178,11 @@ def render_trader_proposal(proposal: TraderProposal) -> str:
     lines = [f"**Action**: {proposal.action.value}"]
     if proposal.position_pct is not None:
         lines.append(f"**Position**: {proposal.position_pct:.0%}")
-    if proposal.entry_price is not None:
-        lines.append(f"**Entry Price**: {proposal.entry_price:.2f}")
-    if proposal.stop_loss is not None:
-        lines.append(f"**Stop Loss**: {proposal.stop_loss:.2f}")
-    if proposal.take_profit is not None:
-        lines.append(f"**Take Profit**: {proposal.take_profit:.2f}")
+    if proposal.entry_signal:
+        lines.append(f"**Day1入场信号**: {proposal.entry_signal}")
+    if proposal.day1_upside_catalyst:
+        lines.append(f"**看好Day1上涨理由**: {proposal.day1_upside_catalyst}")
+    lines.append(f"**Day2卖出规则**: {proposal.day2_forced_exit_note}")
     lines.append(f"\n**Reasoning**: {proposal.reasoning}")
     return "\n".join(lines)
 
@@ -200,4 +199,6 @@ def render_portfolio_decision(decision: PortfolioDecision) -> str:
     lines.append(f"\n**Investment Thesis**: {decision.investment_thesis}")
     if decision.key_risks:
         lines.append(f"\n**Key Risks**: {', '.join(decision.key_risks)}")
+    lines.append(f"\n---")
+    lines.append(f"*策略: Day0收盘分析 → Day1开盘买入 → Day2收盘前强制平仓*")
     return "\n".join(lines)

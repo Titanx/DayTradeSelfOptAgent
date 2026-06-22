@@ -392,6 +392,90 @@ def _to_xq(symbol: str) -> str:
 
 
 # ============================================================
+# 流动性/风险检查工具 (一日游策略专用)
+# ============================================================
+
+def check_liquidity_risk(symbol: str, stock_name: str = "") -> str:
+    """
+    检查股票的一日游流动性风险（跌停/停牌/成交额/ST）。
+
+    一日游策略硬约束：Day 2 必须能卖出。如果跌停或停牌，策略失效。
+
+    Args:
+        symbol: 股票代码
+        stock_name: 股票名称（可选）
+    """
+    lines = [f"# 流动性风险检查 — {stock_name or symbol} ({symbol})", ""]
+
+    try:
+        quote_data = get_stock_realtime_quote(symbol)
+        price_data = get_stock_price_data(symbol, days=10)
+    except Exception as e:
+        lines.append(f"> ❌ 无法获取数据，无法评估流动性: {e}")
+        lines.append(f"> ⚠️ 保守建议: 回避该股，流动性不可知是最坏情况")
+        return "\n".join(lines)
+
+    import re
+
+    # 1. ST 检查
+    is_st = symbol.startswith("600") is False and symbol.startswith("000") is False and symbol.startswith("002") is False
+    name_lower = stock_name.lower() if stock_name else ""
+    st_match = bool(re.search(r'[*]?ST', quote_data)) or bool(re.search(r'[*]?ST', price_data))
+    if st_match or 'st' in name_lower:
+        lines.append("### 1. ST/退市风险")
+        lines.append("> 🔴 **该股为 ST 股票，涨跌停仅 5%，流动性极差，一日游策略严禁参与！**")
+        lines.append("> 建议: **强制回避**")
+    else:
+        lines.append("### 1. ST/退市风险")
+        lines.append("> ✅ 非 ST 股票")
+
+    # 2. 停牌检查
+    lines.append("")
+    lines.append("### 2. 停牌风险")
+    if "停牌" in quote_data or "停牌" in price_data:
+        lines.append("> 🔴 **检测到停牌信息，该股当前可能处于停牌状态！**")
+    else:
+        lines.append("> ✅ 未检测到停牌信号（注意：停牌通常在下一个交易日才会公告）")
+
+    # 3. 跌停风险（近期是否跌停）
+    lines.append("")
+    lines.append("### 3. 近期跌停检查")
+    limit_down = bool(re.search(r'跌停', quote_data)) or bool(re.search(r'跌停', price_data))
+    if limit_down:
+        lines.append("> 🔴 **近期有跌停记录！Day 2 跌停将导致无法卖出**")
+    else:
+        lines.append("> ✅ 近期未检测到跌停")
+
+    # 4. 成交额检查
+    lines.append("")
+    lines.append("### 4. 成交额流动性")
+    amount_patterns = [
+        r'成交[额量][：:]\s*([\d.,]+[亿万])',
+        r'成交[额量]\s*([\d.,]+[亿万])',
+    ]
+    found_amount = None
+    for pat in amount_patterns:
+        m = re.search(pat, quote_data)
+        if m:
+            found_amount = m.group(1)
+            break
+    if found_amount:
+        lines.append(f"> 最新成交额: {found_amount}")
+    lines.append("> 一日游策略要求: 日成交额 ≥ 1 亿元（否则大单卖出可能砸盘或无法成交）")
+
+    lines.append("")
+    lines.append("### 结论")
+    if st_match:
+        lines.append("> 🔴 **坚决回避** — ST 股票不符合一日游策略条件")
+    elif limit_down:
+        lines.append("> 🟠 **建议观望** — 有跌停记录，Day 2 可能无法顺利卖出")
+    else:
+        lines.append("> 🟡 **需结合其他分析判断** — 无硬性排除条件")
+
+    return "\n".join(lines)
+
+
+# ============================================================
 # 工具函数映射
 # ============================================================
 
@@ -402,6 +486,7 @@ MARKET_TOOLS = [
     get_market_sentiment_data,
     get_sector_data,
     get_north_flow_data,
+    check_liquidity_risk,
 ]
 
 FUNDAMENTAL_TOOLS = [

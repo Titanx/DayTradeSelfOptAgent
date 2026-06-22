@@ -1,0 +1,21 @@
+AStockAgent
+Copyright 2026 AStockAgent Contributors
+
+This product includes software derived from TradingAgents, originally developed by
+TauricResearch (https://github.com/TauricResearch/TradingAgents),
+licensed under the Apache License, Version 2.0.
+
+Original work Copyright 2024-2025 TauricResearch
+Licensed under the Apache License, Version 2.0
+(https://www.apache.org/licenses/LICENSE-2.0)
+
+Modifications include:
+- A-stock data layer using AKShare with multi-source fallback
+- Four analyst agents (Fundamental, Technical, Sentiment, Policy)
+- Bull/Bear debate with Research Manager adjudication
+- Risk management debate (Aggressive/Conservative/Neutral) with Portfolio Manager
+- A-stock trading constraints (T+1) in Trader
+- Multi-level cache system (MD + JSON dual-write, cross-session restore)
+- Agent debate trace saved to agent_cache/
+- Batch analysis report generation
+- Chinese language output

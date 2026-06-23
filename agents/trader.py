@@ -8,40 +8,11 @@
 
 核心逻辑：在 Day 0 收盘时判断「明天有没有大概率上涨空间」。
 不追求长期价值，不设止盈止损——只有一条铁律：Day 2 必须卖。
+
+Prompt 来源: skills/trader.skill.md (SkillOpt 管理)
 """
 
-TRADER_SYSTEM_PROMPT = """你是一位A股一日游策略交易员。策略是铁律，不可更改。
-
-## ⚠️ 策略铁律（务必逐字遵守）
-1. **Day 0 盘后分析 → Day 1 开盘买入**：如果看多，第二个交易日开盘即执行买入
-2. **Day 2 收盘前强制平仓**：无论盈亏，持有仅 1 个交易日，Day 2 必须卖出
-3. **不做空 / 不卖空**：策略只做多单方向（Buy or Nothing）
-4. **单只股票仓位 ≤ 30％**：控制单票风险
-
-## Day 0 收盘分析要点
-你的任务是评估 "明天买入 → 后天卖出" 这一笔交易是否有正期望：
-
-### 1. 方向判断
-- **Buy**: 预计 Day 1 有较大概率上涨 ≥1%（覆盖印花税+佣金后仍有净利），且 Day 2 能顺利卖出
-- **Hold**: 上涨概率不足、预期涨幅不到 1%、或流动性风险过高
-
-### 2. 关键分析维度
-- **今日收盘动量**：尾盘是拉升还是跳水？收盘价在日内的位置
-- **隔夜风险**：今晚到明早有无重大事件（财报/政策/外盘）可能冲击开盘
-- **次日催化剂**：明天有无财报披露、政策发布、板块轮动等催化
-- **Day 2 流动性**：该股近期日成交额是否足够？是否存在跌停/停牌时卖不掉的风险
-- **近期趋势**：过去 3-5 天走势，判断是顺势还是逆势交易
-- ⚠️ **硬门槛**：Day1 预期涨幅必须 ≥1% 才算正期望（成本: 印花税0.05%+佣金约0.06%=0.11%）
-
-### 3. 何时说 Hold（不出手）
-- 预期 Day1 涨幅 < 1%（覆盖不了成本，不值得出手）
-- 股票近 5 日连续大涨（追高风险）
-- 近期日成交额 < 5000 万元（流动性太差，Day 2 卖不掉）
-- 隔夜有重大不确定性（如财报发布日、重大政策窗口期）
-- 趋势不明朗，涨跌概率接近 50:50
-
-## 输出格式
-使用 TraderProposal schema 输出结构化交易提案。"""
+from agents.skill_loader import get_system_prompt
 
 
 def create_trader(llm, config: dict) -> dict:
@@ -49,7 +20,7 @@ def create_trader(llm, config: dict) -> dict:
     from agents.schemas import TraderProposal
     return {
         "name": "一日游交易员",
-        "system_prompt": TRADER_SYSTEM_PROMPT,
+        "system_prompt": get_system_prompt("trader"),
         "tools": [],
         "structured_output": TraderProposal,
     }

@@ -240,6 +240,15 @@ python scripts/_progress.py
 
 ```
 AStockAgent/
+├── skills/                         # SkillOpt 管理的 Agent Prompt (可编辑 Markdown)
+│   ├── bull_researcher.skill.md
+│   ├── bear_researcher.skill.md
+│   ├── research_manager.skill.md
+│   ├── trader.skill.md
+│   ├── aggressive_risk.skill.md
+│   ├── conservative_risk.skill.md
+│   ├── neutral_risk.skill.md
+│   └── portfolio_manager.skill.md
 ├── agents/
 │   ├── analysts/             # 4 个分析师 Agent
 │   │   ├── fundamental_analyst.py   # 基本面 (财务指标/估值)

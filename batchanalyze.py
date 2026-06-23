@@ -5,8 +5,13 @@
 每支股票:
   - results/{code}/{timestamp}_analysis.md  (完整Markdown结果)
   - results/{code}/{timestamp}_thinking.md  (思考过程+报告)
+
+用法:
+  python batchanalyze.py                # 最新交易日
+  python batchanalyze.py --date 2026-06-22  # 指定日期
 """
 
+import argparse
 import os
 import sys
 import time

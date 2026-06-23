@@ -1,4 +1,4 @@
-# DayTraderSelfOptAgent
+# DayTradeSelfOptAgent
 
 基于数据和舆论监控的 A 股一日游策略多智能体系统，集成 SkillOpt 自我优化闭环。
 
@@ -173,7 +173,7 @@ python scripts/_progress.py
 ## 项目结构
 
 ```
-DayTraderSelfOptAgent/
+DayTradeSelfOptAgent/
 ├── skills/                         # SkillOpt 管理的 Agent Prompt (可编辑 Markdown)
 │   ├── bull_researcher.skill.md
 │   ├── bear_researcher.skill.md

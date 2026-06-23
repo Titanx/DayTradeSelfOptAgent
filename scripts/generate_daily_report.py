@@ -1,217 +1,282 @@
-"""生成当日批量分析总结报告 MD"""
+# Generate daily report: today prediction + yesterday backtest -> daily_reports/
 import json
-import re
-from pathlib import Path
+import urllib.request
+import sys
 from datetime import datetime
+from pathlib import Path
+from collections import defaultdict
 
-PROJ = Path(__file__).parent.parent
-results_dir = PROJ / "data" / "results"
-all_files = sorted(results_dir.glob("*_analysis.cache.json"))
-if not all_files:
-    print("无结果文件")
-    exit(1)
+PROJECT_DIR = Path(__file__).parent.parent
+RESULTS_DIR = PROJECT_DIR / "data" / "results"
+REPORTS_DIR = PROJECT_DIR / "daily_reports"
 
-# 取最新日期的结果
-dates = set()
-for f in all_files:
+STOCKS = [
+    ("sh600438", "Tongwei", "Solar"),
+    ("sh601012", "LONGi", "Solar"),
+    ("sz300274", "Sungrow", "Solar"),
+    ("sh688599", "Trina", "Solar"),
+    ("sz300751", "Maxwell", "Solar"),
+    ("sz002202", "Goldwind", "Wind"),
+    ("sh601615", "MingYang", "Wind"),
+    ("sh603606", "OrientCable", "Wind"),
+    ("sz300850", "Xinqianglian", "Wind"),
+    ("sz001289", "Longyuan", "Wind"),
+    ("sz002230", "iFlytek", "AI"),
+    ("sh688256", "Cambricon", "AI"),
+    ("sz000977", "Inspur", "AI"),
+    ("sz300308", "Zhongji", "AI"),
+    ("sz300033", "Hithink", "AI"),
+    ("sz300750", "CATL", "Energy"),
+    ("sz300014", "EVE", "Energy"),
+    ("sz002074", "Guoxuan", "Energy"),
+    ("sz002460", "Ganfeng", "Energy"),
+    ("sh601727", "SEC", "Energy"),
+    ("sz002415", "Hikvision", "Vision"),
+    ("sz002236", "Dahua", "Vision"),
+    ("sz002920", "DesaySV", "Vision"),
+    ("sz300496", "ThunderSoft", "Vision"),
+    ("sh603501", "WillSemi", "Vision"),
+]
+
+RATING_EMOJI = {"Overweight": "OW", "Buy": "BUY", "Hold": "HOLD", "Underweight": "UW", "Sell": "SELL"}
+
+
+def get_kline(sid):
+    url = (
+        "http://web.ifzq.gtimg.cn/appstock/app/fqkline/get"
+        "?param={sid},day,,,5,qfq".format(sid=sid)
+    )
+    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+    resp = urllib.request.urlopen(req, timeout=10)
+    return json.loads(resp.read().decode("utf-8"))["data"][sid]["qfqday"]
+
+
+def load_predictions(date_str):
+    preds = {}
+    for f in RESULTS_DIR.glob("*_" + date_str + "_analysis.cache.json"):
+        try:
+            d = json.loads(f.read_text(encoding="utf-8"))
+            preds[d["symbol"]] = d
+        except Exception:
+            pass
+    return preds
+
+
+def pct_str(v):
+    return "{:+.2f}%".format(v)
+
+
+# ---- discover dates ----
+today = datetime.now()
+today_str = today.strftime("%Y-%m-%d")
+
+all_dates = set()
+for f in RESULTS_DIR.glob("*_analysis.cache.json"):
     try:
         d = json.loads(f.read_text(encoding="utf-8"))
-        dates.add(d.get("trade_date", ""))
+        td = d.get("trade_date", "")
+        if td:
+            all_dates.add(td)
     except Exception:
         pass
-latest_date = max(dates) if dates else ""
-files = [f for f in all_files if latest_date in f.stem]
-if not files:
-    files = all_files
 
-# ---------- 板块映射 ----------
-SYMBOL_SECTOR = {
-    "600438": "光伏", "601012": "光伏", "300274": "光伏", "688599": "光伏", "300751": "光伏",
-    "002202": "风电", "601615": "风电", "603606": "风电", "300850": "风电", "001289": "风电",
-    "002230": "AI", "688256": "AI", "000977": "AI", "300308": "AI", "300033": "AI",
-    "300750": "储能", "300014": "储能", "002074": "储能", "002460": "储能", "601727": "储能",
-    "002415": "视觉", "002236": "视觉", "002920": "视觉", "300496": "视觉", "603501": "视觉",
-}
-SECTOR_LABEL = {"光伏": "☀️ 光伏", "风电": "💨 风电", "AI": "🧠 AI", "储能": "🔋 储能", "视觉": "👁️ 视觉"}
+sorted_dates = sorted(all_dates)
+if len(sorted_dates) < 1:
+    print("No analysis data")
+    sys.exit(0)
 
-trade_date = json.loads(files[0].read_text(encoding="utf-8")).get("trade_date", "")
-today = datetime.now().strftime("%Y-%m-%d")
+analysis_date = sorted_dates[-1]
+backtest_date = sorted_dates[-2] if len(sorted_dates) >= 2 else None
 
-# ---------- 加载所有结果 ----------
-results = []
-for f in files:
-    d = json.loads(f.read_text(encoding="utf-8"))
-    d["_sector"] = SYMBOL_SECTOR.get(d["symbol"], "未知")
-    results.append(d)
+print("Today: " + today_str)
+print("Analysis date: " + analysis_date)
+print("Backtest date: " + str(backtest_date))
 
-results.sort(key=lambda r: (r["_sector"], r["rating"], r["symbol"]))
-
-# ---------- 按板块/评级分组 ----------
-by_sector = {}
-by_rating = {}
-for r in results:
-    sector = SECTOR_LABEL.get(r["_sector"], r["_sector"])
-    by_sector.setdefault(sector, []).append(r)
-    by_rating.setdefault(r["rating"], []).append(r)
-
-RATING_EMOJI = {"Buy": "🟢", "Overweight": "🟡", "Hold": "⚪", "Underweight": "🟠", "Sell": "🔴"}
-RATING_ORDER = ["Buy", "Overweight", "Hold", "Underweight", "Sell"]
-
-def _extract_logic(text: str) -> str:
-    """从 decision JSON 文本中提取 investment_logic / reasoning / investment_thesis"""
-    if not text:
-        return ""
-    text = text.strip()
-    # 去掉 markdown 代码块标记
-    text = re.sub(r"^```json\s*", "", text)
-    text = re.sub(r"\s*```$", "", text)
-    # 尝试 JSON 解析
-    try:
-        obj = json.loads(text)
-        decision = obj.get("decision", obj)
-        if isinstance(decision, dict):
-            logic = (
-                decision.get("investment_logic")
-                or decision.get("reasoning")
-                or decision.get("investment_thesis")
-                or decision.get("investment_rationale")
-                or ""
-            )
-            if logic:
-                return logic
-    except (json.JSONDecodeError, TypeError):
-        pass
-    # Fallback: 找关键段落
-    for pat in ["核心投资论题[：:](.*?)(?:\\n\\n|$)", "核心逻辑[：:](.*?)(?:\\n\\n|$)",
-                 "核心矛盾[：:](.*?)(?:\\n\\n|$)", "我的决策倾向于(.*?)(?:\\n\\n|$)",
-                 "investment_logic[：:]\s*\"([^\"]{50,300})\""]:
-        m = re.search(pat, text, re.DOTALL)
-        if m:
-            return m.group(1).strip()[:300]
-    # 取第一段有意义的文字
-    lines = [l.strip() for l in text.split("\n") if l.strip() and len(l.strip()) > 20]
-    return lines[0][:300] if lines else text[:200]
-
-# ---------- 生成 MD ----------
+# ---- build report ----
 lines = []
-lines.append(f"# 📊 AStockAgent 批量分析报告 — {trade_date}")
-lines.append(f"**生成时间**: {today} | **股票数**: {len(results)} 支 | **覆盖板块**: 光伏/风电/AI/储能/视觉")
+lines.append("# AStockAgent Daily Report - " + today_str)
 lines.append("")
-lines.append("> ⚠️ 本报告由 AI 系统自动生成，仅供学习研究，不构成投资建议。")
+lines.append(
+    "> **Disclaimer**: This report is auto-generated by an AI multi-agent system. "
+    "All analysis results are for educational/research purposes ONLY and do NOT constitute "
+    "any investment advice. Past performance does not guarantee future results. "
+    "The system may produce errors - do NOT use for real trading."
+)
 lines.append("")
-
-# === 一、总览 ===
-lines.append("## 一、总览")
-lines.append("")
-lines.append("| 评级 | 数量 | 占比 |")
-lines.append("|------|:--:|:----:|")
-total = len(results)
-for rating in RATING_ORDER:
-    count = len(by_rating.get(rating, []))
-    if count > 0:
-        e = RATING_EMOJI.get(rating, "")
-        lines.append(f"| {e} {rating} | {count} | {count/total:.0%} |")
-lines.append("")
-lines.append(f"**市场基调**: 极度分化 — 储能/AI硬件全线超配，光伏产业链全面谨慎")
+lines.append("**Generated**: " + today.strftime("%Y-%m-%d %H:%M"))
+lines.append("**Strategy**: One-Day Swing (Day0 analyze -> Day1 buy -> Day2 force close)")
+lines.append("**Model**: DeepSeek-V4  temperature=0.1")
+lines.append("**Target**: >=1% gain (net ~0.89% after 0.11% cost)")
 lines.append("")
 
-# === 板块热力图 ===
-lines.append("### 板块热度")
-lines.append("")
-lines.append("| 板块 | 股票数 | 超配 | 中性 | 低配 | 平均信心度 | 热度 |")
-lines.append("|------|:--:|:--:|:--:|:--:|:--:|------|")
-for sector_label in ["🔋 储能", "🧠 AI", "👁️ 视觉", "💨 风电", "☀️ 光伏"]:
-    stocks = by_sector.get(sector_label, [])
-    if not stocks:
-        continue
-    ow = sum(1 for s in stocks if s["rating"] == "Overweight")
-    ho = sum(1 for s in stocks if s["rating"] == "Hold")
-    uw = sum(1 for s in stocks if s["rating"] in ("Underweight", "Sell"))
-    avg_conf = sum(s["confidence"] for s in stocks) / len(stocks)
-    bar = "🔥" * ow + "➖" * ho + "❄️" * uw
-    lines.append(f"| {sector_label} | {len(stocks)} | {ow} | {ho} | {uw} | {avg_conf:.0%} | {bar} |")
-lines.append("")
-
-# === 二、各板块详情 ===
-lines.append("## 二、各板块详情")
-lines.append("")
-
-for sector_label in ["🔋 储能", "🧠 AI", "👁️ 视觉", "💨 风电", "☀️ 光伏"]:
-    stocks = by_sector.get(sector_label, [])
-    if not stocks:
-        continue
-    lines.append(f"### {sector_label}")
-    lines.append("")
-    lines.append("| 代码 | 名称 | 评级 | 信心度 | 辩论轮 | 风险轮 | 核心逻辑 |")
-    lines.append("|------|------|------|:--:|:--:|:--:|------|")
-    for s in sorted(stocks, key=lambda x: (x["rating"], -x["confidence"])):
-        e = RATING_EMOJI.get(s["rating"], "")
-        dr = s.get("debate_rounds", "-")
-        rr = s.get("risk_rounds", "-")
-        logic = _extract_logic(s.get("decision", ""))
-        # 截短
-        if len(logic) > 80:
-            logic = logic[:77] + "..."
-        lines.append(f"| {s['symbol']} | {s.get('stock_name','')} | {e} {s['rating']} | {s['confidence']:.0%} | {dr} | {rr} | {logic} |")
-    lines.append("")
-    # 板块小结
-    ow_s = [s for s in stocks if s["rating"] == "Overweight"]
-    uw_s = [s for s in stocks if s["rating"] in ("Underweight", "Sell")]
-    ho_s = [s for s in stocks if s["rating"] == "Hold"]
-    if ow_s:
-        names = "、".join(s.get("stock_name", "") for s in ow_s)
-        lines.append(f"**超配**: {names}")
-    if ho_s:
-        names = "、".join(s.get("stock_name", "") for s in ho_s)
-        lines.append(f"**中性**: {names}")
-    if uw_s:
-        names = "、".join(s.get("stock_name", "") for s in uw_s)
-        lines.append(f"**低配**: {names}")
-    lines.append("")
-
-# === 三、各评级详情 ===
-lines.append("## 三、各评级详情")
-lines.append("")
-
-for rating in RATING_ORDER:
-    stocks = by_rating.get(rating, [])
-    if not stocks:
-        continue
-    e = RATING_EMOJI.get(rating, "")
-    lines.append(f"### {e} {rating}（{len(stocks)} 支）")
-    lines.append("")
-    for s in stocks:
-        sector = s["_sector"]
-        lines.append(f"**{s['symbol']} {s.get('stock_name','')}** [{sector}] 信心度 {s['confidence']:.0%}")
-        logic = _extract_logic(s.get("decision", ""))
-        if logic:
-            lines.append(f"> {logic}")
-            lines.append("")
-    lines.append("")
-
-# === 四、方法论 ===
-lines.append("## 四、方法论")
-lines.append("")
-lines.append("**分析框架**: 四维分析师协同 LangGraph 图编排")
-lines.append("")
-lines.append("| 分析师 | 数据源 | 权重 |")
-lines.append("|--------|--------|:--:|")
-lines.append("| 🔬 基本面 | 同花顺财务指标(ROE/ROA/毛利率) + PE/PB估值 | 25% |")
-lines.append("| 📈 技术面 | 东方财富日线OHLCV + MA均线 + 量价分析 | 25% |")
-lines.append("| 💬 舆情情绪 | 雪球帖子/行情 + 东方财富新闻 + 微博搜索 | 25% |")
-lines.append("| 🏛️ 政策面 | 行业板块动量 + 北向资金流向 + 市场情绪 | 25% |")
-lines.append("")
-lines.append("**辩论机制**: 多空研究员 3 轮辩论 → 风险管理 3 轮辩论 → 投资经理终决")
-lines.append("")
-lines.append(f"**数据日期**: {trade_date} | **LLM**: DeepSeek-V3")
-lines.append("")
+# ====== Part 1: Today's Prediction ======
 lines.append("---")
 lines.append("")
-lines.append("> ⚠️ **免责声明**: 本报告由 AI 多智能体系统自动生成，仅供学习研究使用，不构成任何投资建议。股市有风险，投资需谨慎。")
+lines.append("## 1. Today's Prediction (" + analysis_date + " -> next trading day)")
 lines.append("")
 
-# 写入
-report_path = PROJ / "data" / f"{trade_date}_daily_report.md"
+preds = load_predictions(analysis_date)
+if preds:
+    by_sector = defaultdict(list)
+    for sid, name, sector in STOCKS:
+        code = sid[2:]
+        if code in preds:
+            by_sector[sector].append((code, name, preds[code]))
+
+    buy_count = sum(1 for p in preds.values() if p["rating"] in ("Buy", "Overweight"))
+    hold_count = sum(1 for p in preds.values() if p["rating"] == "Hold")
+    uw_count = sum(1 for p in preds.values() if p["rating"] == "Underweight")
+    sell_count = sum(1 for p in preds.values() if p["rating"] == "Sell")
+
+    lines.append("| BUY/OW | HOLD | UW | SELL |")
+    lines.append("|:--:|:--:|:--:|:--:|")
+    lines.append(
+        "| **{b}** | {h} | {u} | {s} |".format(
+            b=buy_count, h=hold_count, u=uw_count, s=sell_count
+        )
+    )
+    lines.append("")
+
+    sector_names = [("Solar", "Solar"), ("Wind", "Wind"), ("AI", "AI"),
+                    ("Energy", "Energy Storage"), ("Vision", "Vision")]
+    for sector_key, sector_label in sector_names:
+        if sector_key not in by_sector:
+            continue
+        lines.append("### " + sector_label)
+        lines.append("")
+        lines.append("| Code | Name | Rating | Confidence |")
+        lines.append("|------|------|:--:|:--:|")
+        for code, name, p in by_sector[sector_key]:
+            r = p["rating"]
+            lines.append(
+                "| {c} | {n} | {rt} | {cf:.0%} |".format(
+                    c=code, n=name, rt=r, cf=p["confidence"]
+                )
+            )
+        lines.append("")
+
+    if buy_count > 0:
+        lines.append("### Buy Signals")
+        lines.append("")
+        for p in preds.values():
+            if p["rating"] in ("Buy", "Overweight"):
+                summary = (p.get("summary") or p.get("investment_logic") or "-")[:200]
+                lines.append(
+                    "- **{s}** ({r}, conf {cf:.0%}): {sm}".format(
+                        s=p["symbol"], r=p["rating"], cf=p["confidence"], sm=summary
+                    )
+                )
+        lines.append("")
+else:
+    lines.append("*No analysis data for today*")
+    lines.append("")
+
+# ====== Part 2: Yesterday's Backtest ======
+lines.append("---")
+lines.append("")
+lines.append(
+    "## 2. Yesterday's Backtest (" + str(backtest_date) + " prediction -> next-day actual)"
+)
+lines.append("")
+
+if backtest_date:
+    backtest_preds = load_predictions(backtest_date)
+    if backtest_preds:
+        hit = 0
+        avoid = 0
+        miss = 0
+        step = 0
+        table_lines = []
+        table_lines.append(
+            "| Code | Name | Sector | Prediction | Conf | CloseChg | OpenBuy | Result |"
+        )
+        table_lines.append(
+            "|------|------|--------|:--:|:--:|:--:|:--:|:--:|"
+        )
+
+        for sid, name, sector in STOCKS:
+            code = sid[2:]
+            bp = backtest_preds.get(code)
+            if not bp:
+                continue
+            try:
+                klines = get_kline(sid)
+                d0 = None
+                d1 = None
+                for k in klines:
+                    if k[0] == backtest_date:
+                        d0 = float(k[2])
+                    if k[0] > backtest_date and d1 is None:
+                        d1 = {"open": float(k[1]), "close": float(k[2])}
+                if d0 is None or d1 is None:
+                    continue
+            except Exception:
+                continue
+
+            close_pct = (d1["close"] / d0 - 1) * 100
+            open_pct = (d1["close"] / d1["open"] - 1) * 100
+            should_buy = bp["rating"] in ("Buy", "Overweight")
+            actually_up = close_pct >= 1.0
+
+            if should_buy and actually_up:
+                v = "HIT"
+            elif should_buy:
+                v = "MISS"
+            elif actually_up:
+                v = "STEP"
+            else:
+                v = "AVOID"
+
+            if should_buy and actually_up:
+                hit += 1
+            elif should_buy:
+                miss += 1
+            elif actually_up:
+                step += 1
+            else:
+                avoid += 1
+
+            table_lines.append(
+                "| {c} | {n} | {sec} | {r} | {cf:.0%} | {cp} | {op} | {v} |".format(
+                    c=code,
+                    n=name,
+                    sec=sector,
+                    r=bp["rating"],
+                    cf=bp["confidence"],
+                    cp=pct_str(close_pct),
+                    op=pct_str(open_pct),
+                    v=v,
+                )
+            )
+
+        total = hit + avoid + miss + step
+        lines.append("| Metric | Value |")
+        lines.append("|--------|:--:|")
+        lines.append("| Total | {t} |".format(t=total))
+        lines.append("| HIT (Buy->up>=1%) | {h} |".format(h=hit))
+        lines.append("| AVOID (Hold->not up) | {a} |".format(a=avoid))
+        lines.append("| MISS (Buy->down/fail) | {m} |".format(m=miss))
+        lines.append("| STEP (Hold->up>=1%) | {s} |".format(s=step))
+        lines.append(
+            "| Accuracy | **{acc:.0f}%** |".format(acc=(hit + avoid) / total * 100)
+        )
+        if hit + miss > 0:
+            lines.append(
+                "| Buy Precision | {h}/{t2} = {pct:.0f}% |".format(
+                    h=hit, t2=hit + miss, pct=hit / (hit + miss) * 100
+                )
+            )
+        lines.append("")
+
+        lines.extend(table_lines)
+        lines.append("")
+    else:
+        lines.append("*No prediction data for " + str(backtest_date) + "*")
+else:
+    lines.append("*No backtest data available (need >=2 days of analysis cache)*")
+
+# ---- write ----
+REPORTS_DIR.mkdir(exist_ok=True)
+report_path = REPORTS_DIR / (today_str + "_daily_report.md")
 report_path.write_text("\n".join(lines), encoding="utf-8")
-print(f"✅ 报告已生成: {report_path}")
-print(f"   共 {len(lines)} 行")
+print("\nReport saved: " + str(report_path))

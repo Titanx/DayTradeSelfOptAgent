@@ -1,17 +1,18 @@
 """run_pipeline.py — 一键运行的完整 SkillOpt Pipeline
 
 pipeline 步骤:
-  1. collector  → 收集回测数据，输出 rollout.json
-  2. optimizer  → 分析错误，输出 edits.json
-  3. [review]   → 人工审查编辑提案（可选，默认跳过）
-  4. applier    → 应用编辑到 skills/*.skill.md
-  5. gate       → (手动) 在验证集重跑后调用 gate.py 比较准确率
+  1. collector       → 收集回测数据，输出 rollout.json
+  1.5 debate_logger  → 归档辩论轨迹到 opt/trajectories/{run_id}/
+  2. optimizer       → 分析错误，输出 edits.json
+  3. [review]        → 人工审查编辑提案（可选，默认跳过）
+  4. applier         → 应用编辑到 skills/*.skill.md
+  5. gate            → (手动) 在验证集重跑后调用 gate.py 比较准确率
 
 用法:
   python opt/run_pipeline.py                        # 全自动模式 (无人工审查)
   python opt/run_pipeline.py --review               # 审查模式 (显示编辑后确认)
-  python opt/run_pipeline.py --collect-only          # 只收集数据
-  python opt/run_pipeline.py --rollback             # 回滚到上次快照
+  python opt/run_pipeline.py --collect-only          # 只收集数据+归档轨迹
+  python opt/run_pipeline.py --status               # 查看状态（含轨迹版本列表）
 """
 
 import argparse
@@ -23,10 +24,14 @@ from pathlib import Path
 PROJECT_DIR = Path(__file__).parent.parent
 sys.path.insert(0, str(PROJECT_DIR))
 
+from dotenv import load_dotenv
+load_dotenv(PROJECT_DIR / ".env", override=True)
+
 from opt.collector import collect, main as collector_main
 from opt.optimizer import run_optimizer
 from opt.applier import apply_edits
 from opt.gate import gate
+from opt.debate_logger import save_trajectories, list_versions
 
 
 def step_collect():
@@ -34,6 +39,26 @@ def step_collect():
     print("Step 1: Collect backtest signals → rollout.json")
     print("=" * 60)
     collector_main()
+
+
+def step_log_trajectories(run_id, edits_data=None):
+    """Step 1.5/2.5: 归档辩论轨迹到版本目录。"""
+    print("\n" + "=" * 60)
+    print("Step 1.5: Archive debate trajectories → opt/trajectories/{}/".format(run_id))
+    print("=" * 60)
+
+    rollout_path = PROJECT_DIR / "opt" / "input" / "rollout.json"
+    if not rollout_path.exists():
+        print("No rollout.json found, skipping trajectory archive.")
+        return {"saved": 0, "missed": 0}
+
+    rollout_data = json.loads(rollout_path.read_text(encoding="utf-8"))
+    result = save_trajectories(rollout_data, run_id=run_id, edits_data=edits_data)
+
+    if result["missed"] > 0:
+        print("Warning: {} stocks have no agent trace (need to re-run analyze)".format(result["missed"]))
+
+    return result
 
 
 def step_optimize():
@@ -83,7 +108,7 @@ def step_apply():
 
 
 def step_status():
-    """Print pipeline status."""
+    """Print pipeline status, including trajectory versions."""
     history_path = PROJECT_DIR / "opt" / "output"
     print("\nPipeline Status:")
     print("-" * 40)
@@ -115,12 +140,21 @@ def step_status():
         buf = json.loads(buf_path.read_text(encoding="utf-8"))
         print("  rejected_buffer: {} entries".format(len(buf)))
 
+    # Trajectory versions
+    versions = list_versions()
+    if versions:
+        print("  trajectories: {} versions".format(len(versions)))
+        for v in versions[-5:]:
+            print("    {}".format(v["run_id"]))
+    else:
+        print("  trajectories: NO VERSIONS")
+
 
 def main():
     parser = argparse.ArgumentParser(description="SkillOpt Pipeline Runner")
     parser.add_argument("--review", action="store_true", help="Interactive review before applying")
-    parser.add_argument("--collect-only", action="store_true", help="Only collect data")
-    parser.add_argument("--status", action="store_true", help="Show pipeline status")
+    parser.add_argument("--collect-only", action="store_true", help="Only collect data + archive traces")
+    parser.add_argument("--status", action="store_true", help="Show pipeline status (incl. trajectories)")
     parser.add_argument("--skip-optimize", action="store_true", help="Skip optimizer (use existing edits.json)")
     args = parser.parse_args()
 
@@ -128,7 +162,10 @@ def main():
         step_status()
         return
 
-    print("AStockAgent SkillOpt Pipeline")
+    run_id = datetime.now().strftime("v%Y%m%d_%H%M%S")
+
+    print("DayTradeSelfOptAgent SkillOpt Pipeline")
+    print("Run ID: {}".format(run_id))
     print("Started: {}".format(datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
     print()
 
@@ -136,8 +173,12 @@ def main():
     step_collect()
 
     if args.collect_only:
-        print("--collect-only: done.")
+        step_log_trajectories(run_id)
+        print("--collect-only: done. Trajectory version: {}".format(run_id))
         return
+
+    # Step 1.5: Archive debate trajectories
+    step_log_trajectories(run_id)
 
     # Step 2: Optimize
     if not args.skip_optimize:
@@ -145,6 +186,9 @@ def main():
         if edit_result is None:
             print("Optimizer failed. Pipeline stopped.")
             return
+
+        # Update trajectory version with edits
+        step_log_trajectories(run_id, edits_data=edit_result)
 
         # Step 3: Review
         if args.review:
@@ -157,8 +201,10 @@ def main():
 
     print("\n" + "=" * 60)
     print("Pipeline complete!")
+    print("Run ID: {}".format(run_id))
     print("Applied: {} edits".format(len(apply_result.get("applied", []))))
     print("Backup: {}".format(apply_result.get("backup_dir", "N/A")))
+    print("Trajectories: opt/trajectories/{}/".format(run_id))
     print("=" * 60)
 
 

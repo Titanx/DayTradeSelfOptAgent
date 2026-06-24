@@ -68,6 +68,11 @@ def apply_edit_to_content(content: str, edit: dict) -> str:
         new_rule = edit.get("new", "").strip()
         if not new_rule:
             return content
+        # 去掉 optimizer 可能额外带的 rule:/anti: 前缀
+        for prefix in ["rule: ", "anti: "]:
+            if new_rule.startswith(prefix):
+                new_rule = new_rule[len(prefix):].strip()
+                break
         # 在 section 区域的末尾添加（在下一个 ## section 之前）
         section_header = "## " + section_name
         target_line = None

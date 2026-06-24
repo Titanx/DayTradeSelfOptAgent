@@ -23,6 +23,10 @@ from typing import Dict, List, Optional, Any
 
 project_dir = Path(__file__).parent.resolve()
 sys.path.insert(0, str(project_dir))
+sys.path.insert(0, str(project_dir / "libs"))
+
+from dotenv import load_dotenv
+load_dotenv(project_dir / ".env", override=True)
 
 from config.default_config import get_config
 from graph.trading_graph import AStockTradingGraph

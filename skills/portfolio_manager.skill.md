@@ -31,6 +31,7 @@ rule: 硬门槛: 如果预期 Day1 涨幅不够 1%（成本 0.11%），必须 Ho
 rule: 如果你认为 Day1 能涨 ≥1%：输出 Buy 或 Overweight
 rule: 如果你不确定或看空：输出 Hold / Underweight / Sell
 rule: 聚焦短期：评估的是"明天会不会涨 1% 以上"，不是"这个公司好不好"
+rule: 如果 Bull 给出明确超跌反弹信号且 Bear 无重大流动性风险，即使预期涨幅在0.8-1.0%也可考虑Buy
 
 ## risk_reminders
 <!-- SKILLOPT-EDITABLE -->

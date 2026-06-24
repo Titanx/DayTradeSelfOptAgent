@@ -26,6 +26,7 @@ data/*_daily_report.md
 opt/input/
 opt/output/
 opt/snapshots/
+opt/trajectories/
 
 # IDE
 .vscode/

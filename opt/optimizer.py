@@ -3,11 +3,13 @@
 输入: opt/input/rollout.json (由 collector.py 生成)
 输出: opt/output/edits.json (结构化编辑提案)
 
-Optimizer LLM: 使用 DeepSeek-V4，仅离线调用（部署时不需要）
+Optimizer LLM: 使用与主系统相同的 langchain_openai.ChatOpenAI + DeepSeek V4 Pro，
+  与 trading_graph.py 中 _create_llm("deep") 完全一致的调用方式。
 """
 
 import json
 import os
+import re
 import sys
 from pathlib import Path
 from datetime import datetime
@@ -15,11 +17,78 @@ from datetime import datetime
 PROJECT_DIR = Path(__file__).parent.parent
 sys.path.insert(0, str(PROJECT_DIR))
 
-from openai import OpenAI
+from dotenv import load_dotenv
+load_dotenv(PROJECT_DIR / ".env", override=True)
 
 INPUT_DIR = PROJECT_DIR / "opt" / "input"
 OUTPUT_DIR = PROJECT_DIR / "opt" / "output"
 SKILLS_DIR = PROJECT_DIR / "skills"
+
+
+def _create_optimizer_llm():
+    """创建 Optimizer LLM 客户端，与主系统 _create_llm("deep") 完全一致。"""
+    from config.default_config import get_config
+    from langchain_openai import ChatOpenAI
+
+    config = get_config()
+    provider = config.get("llm_provider", "deepseek")
+    model = config.get("deep_think_llm", "deepseek-chat")
+    backend = config.get("backend_url")
+    temperature = config.get("temperature", 0.1)
+
+    if provider == "deepseek":
+        api_key = os.environ.get("DEEPSEEK_API_KEY")
+        return ChatOpenAI(
+            model=model,
+            temperature=temperature,
+            api_key=api_key,
+            base_url=backend or "https://api.deepseek.com/v1",
+            model_kwargs={"response_format": {"type": "json_object"}},
+        )
+    elif provider == "openai":
+        api_key = os.environ.get("OPENAI_API_KEY")
+        return ChatOpenAI(
+            model=model,
+            temperature=temperature,
+            api_key=api_key,
+            base_url=backend,
+            model_kwargs={"response_format": {"type": "json_object"}},
+        )
+    elif provider == "qwen":
+        api_key = os.environ.get("DASHSCOPE_API_KEY")
+        return ChatOpenAI(
+            model=model,
+            temperature=temperature,
+            api_key=api_key,
+            base_url=backend or "https://dashscope.aliyuncs.com/compatible-mode/v1",
+            model_kwargs={"response_format": {"type": "json_object"}},
+        )
+    elif provider == "ollama":
+        return ChatOpenAI(
+            model=model,
+            temperature=temperature,
+            base_url=backend or "http://localhost:11434/v1",
+            api_key="ollama",
+            model_kwargs={"response_format": {"type": "json_object"}},
+        )
+    else:
+        api_key = os.environ.get("OPENAI_API_KEY")
+        return ChatOpenAI(
+            model=model,
+            temperature=temperature,
+            api_key=api_key,
+            base_url=backend,
+            model_kwargs={"response_format": {"type": "json_object"}},
+        )
+
+
+def _extract_json(text: str) -> dict:
+    """从 LLM 响应中提取 JSON，支持 markdown 代码块包裹。"""
+    text = text.strip()
+    code_match = re.search(r'```(?:json)?\s*([\s\S]*?)\s*```', text)
+    if code_match:
+        text = code_match.group(1).strip()
+    return json.loads(text)
 
 
 def load_optimizer_prompt():
@@ -36,7 +105,6 @@ def build_user_message(rollout_data: dict) -> str:
     msg += "Overall: {hit} HIT, {avoid} AVOID, {miss} MISS, {step} STEP ".format(**overall)
     msg += "(accuracy: {acc}%)\n\n".format(acc=overall.get("accuracy", 0))
 
-    # Sector breakdown
     msg += "## By Sector\n\n"
     for sector, s in summary.get("by_sector", {}).items():
         msg += "- {sec}: {hit}H/{avoid}A/{miss}M/{step}S (acc {acc}%)\n".format(
@@ -44,7 +112,6 @@ def build_user_message(rollout_data: dict) -> str:
             miss=s["miss"], step=s["step"], acc=s["accuracy"]
         )
 
-    # MISS cases
     miss_cases = summary.get("by_error_type", {}).get("MISS", [])
     if miss_cases:
         msg += "\n## MISS Cases (Buy but fail)\n\n"
@@ -54,7 +121,6 @@ def build_user_message(rollout_data: dict) -> str:
                 rating=c["rating"], conf=c["confidence"], chg=c["actual_chg"]
             )
 
-    # STEP cases
     step_cases = summary.get("by_error_type", {}).get("STEP", [])
     if step_cases:
         msg += "\n## STEP Cases (Hold but up >=1%)\n\n"
@@ -64,14 +130,12 @@ def build_user_message(rollout_data: dict) -> str:
                 rating=c["rating"], conf=c["confidence"], chg=c["actual_chg"]
             )
 
-    # Current skill files
     msg += "\n## Current Skill Files (SKILLOPT-EDITABLE regions only)\n\n"
     skill_files = rollout_data.get("skill_files", {})
     for skill_name in ["bull_researcher", "bear_researcher", "portfolio_manager",
                        "trader", "research_manager"]:
         content = skill_files.get(skill_name, "")
         if content:
-            # Only include the editable sections to save tokens
             msg += "### {}\n```markdown\n{}\n```\n\n".format(skill_name, content[:3000])
 
     return msg
@@ -98,32 +162,22 @@ def run_optimizer(rollout_path: str = None) -> dict:
     system_prompt = load_optimizer_prompt()
     user_message = build_user_message(rollout_data)
 
-    # Initialize client
-    api_key = os.environ.get("DEEPSEEK_API_KEY")
-    base_url = os.environ.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
-    if not api_key:
-        return {"error": "DEEPSEEK_API_KEY not set", "edits": []}
-
-    client = OpenAI(api_key=api_key, base_url=base_url)
+    from langchain_core.messages import SystemMessage, HumanMessage
 
     try:
-        response = client.chat.completions.create(
-            model="deepseek-chat",
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_message},
-            ],
-            temperature=0.1,
-            max_tokens=2000,
-            response_format={"type": "json_object"},
-        )
+        llm = _create_optimizer_llm()
+        response = llm.invoke([
+            SystemMessage(content=system_prompt),
+            HumanMessage(content=user_message),
+        ])
     except Exception as e:
         return {"error": "Optimizer LLM call failed: {}".format(e), "edits": []}
 
     try:
-        result = json.loads(response.choices[0].message.content)
-    except json.JSONDecodeError:
-        return {"error": "Optimizer returned invalid JSON", "edits": []}
+        result = _extract_json(str(response.content))
+    except (json.JSONDecodeError, ValueError) as e:
+        raw = str(response.content)[:500] if response.content else "(empty)"
+        return {"error": "Optimizer returned invalid JSON: {}".format(raw), "edits": []}
 
     result["meta"] = {
         "timestamp": datetime.now().isoformat(),

@@ -22,6 +22,7 @@ rule: 给出明确的投资评级
 rule: 如果多方逻辑坚实且预期涨幅 ≥1%（动量好+催化剂明确+流动性充足）→ Buy/Overweight
 rule: 如果多方略优但涨幅预期不到 1% 或空方风险不可忽视 → Hold
 rule: 如果风险明显大于机会（流动性差/追高/趋势向下）→ Underweight/Hold
+rule: 视觉板块出现连续3日以上调整且尾盘有资金介入迹象时，优先考虑Buy
 
 ## anti_patterns
 <!-- SKILLOPT-EDITABLE -->

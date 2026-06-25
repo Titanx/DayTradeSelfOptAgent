@@ -67,14 +67,14 @@ class ConditionalLogic:
     def should_continue_debate(self, state) -> str:
         """
         多空辩论路由：
-        Bull ↔ Bear 轮转，达到 max 轮后 -> Research Manager
+        Bull ↔ Bear 轮转，达到 max 轮后 -> Reversal Analyst (反弹分析师)
         """
         debate = state.get("investment_debate_state", {})
         count = debate.get("count", 0)
         max_rounds = self.max_debate_rounds
 
         if count >= 2 * max_rounds:
-            return "research_manager"
+            return "reversal_analyst"
 
         # current_response 来自最后一条AI消息
         messages = state.get("messages", [])

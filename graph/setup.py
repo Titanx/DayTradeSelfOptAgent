@@ -209,7 +209,8 @@ class GraphSetup:
         # Phase 2: 研究员辩论节点
         # ========================================================
         from agents.researchers.bull_researcher import (
-            create_bull_researcher, create_bear_researcher, create_research_manager
+            create_bull_researcher, create_bear_researcher, create_research_manager,
+            create_reversal_analyst,
         )
 
         def make_researcher_node(cfg, role_prefix: str):
@@ -233,6 +234,29 @@ class GraphSetup:
                          make_researcher_node(create_bull_researcher(quick, self.config), "Bull: "))
         workflow.add_node("bear_researcher",
                          make_researcher_node(create_bear_researcher(quick, self.config), "Bear: "))
+
+        # 反弹分析师 — EvoSkill 发现的结构性缺口，独立评估超跌反弹机会
+        def reversal_analyst_node(state: AgentState) -> dict:
+            cfg = create_reversal_analyst(deep, self.config)
+            context = self._build_debate_context(state)
+            # 注入 Bull/Bear 辩论摘要
+            debate_summary = []
+            for m in state.get("messages", []):
+                c = str(m.content)
+                if "Bull:" in c or "Bear:" in c:
+                    debate_summary.append(c[-600:])
+            if debate_summary:
+                context += "\n## 多空辩论摘要\n" + "\n".join(debate_summary[-4:])
+            context += "\n\n请评估当前是否存在超跌反弹机会，输出以 'Reversal: ' 开头的结构化分析。"
+            messages = [SystemMessage(content=cfg["system_prompt"]),
+                       HumanMessage(content=context)]
+            response = deep.invoke(messages)
+            content = str(response.content)
+            if not content.startswith("Reversal:"):
+                content = "Reversal: " + content
+            response.content = content
+            return {"messages": [response]}
+        workflow.add_node("reversal_analyst", reversal_analyst_node)
 
         # 研究主管
         def research_manager_node(state: AgentState) -> dict:
@@ -341,17 +365,19 @@ class GraphSetup:
                 workflow.add_edge(prev_clear, spec.key)
                 prev_clear = spec.clear_node_key
 
-        # Phase 2: 最后一个分析师 → 多空辩论
+        # Phase 2: 最后一个分析师 → 多空辩论 → 反弹分析师
         last_clear = plan.specs[-1].clear_node_key
         workflow.add_edge(last_clear, "bull_researcher")
         workflow.add_conditional_edges(
             "bull_researcher", cl.should_continue_debate,
-            {"bear_researcher": "bear_researcher", "research_manager": "research_manager"}
+            {"bear_researcher": "bear_researcher", "reversal_analyst": "reversal_analyst"}
         )
         workflow.add_conditional_edges(
             "bear_researcher", cl.should_continue_debate,
-            {"bull_researcher": "bull_researcher", "research_manager": "research_manager"}
+            {"bull_researcher": "bull_researcher", "reversal_analyst": "reversal_analyst"}
         )
+        # 反弹分析师 → 研究主管
+        workflow.add_edge("reversal_analyst", "research_manager")
 
         # Phase 3: 研究主管 → 交易员
         workflow.add_edge("research_manager", "trader")
@@ -423,7 +449,18 @@ class GraphSetup:
             if "Bull:" in c or "Bear:" in c:
                 parts.append(c + "\n")
 
-        parts.append("\n请综合以上所有信息，给出最终研究投资计划。")
+        # 反弹分析师独立视角
+        parts.append("\n### 反弹分析师评估\n")
+        reversal_found = False
+        for m in state.get("messages", []):
+            c = str(m.content) if hasattr(m, "content") else ""
+            if c.startswith("Reversal:"):
+                parts.append(c + "\n")
+                reversal_found = True
+        if not reversal_found:
+            parts.append("(反弹分析师未产生评估)\n")
+
+        parts.append("\n请综合以上所有信息，给出最终研究投资计划。\n特别关注反弹分析师是否发现了 Bull/Bear 忽略的超跌反弹机会。")
         return "\n".join(parts)
 
     def _build_trader_context(self, state: dict) -> str:

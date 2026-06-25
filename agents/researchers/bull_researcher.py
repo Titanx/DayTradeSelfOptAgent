@@ -41,3 +41,18 @@ def create_research_manager(llm, config: dict) -> dict:
         "tools": [],
         "structured_output": ResearchPlan,
     }
+
+
+def create_reversal_analyst(llm, config: dict) -> dict:
+    """创建反弹分析师 — 由 EvoSkill discovery 发现的结构性缺口。
+
+    专门评估超跌反弹机会（RSI<30、KDJ金叉、尾盘放量企稳等），
+    独立于 Bull/Bear 辩论，为 Research Manager 提供反弹视角。
+    """
+    from agents.schemas import ResearchPlan
+    return {
+        "name": "反弹分析师",
+        "system_prompt": get_system_prompt("reversal_analyst"),
+        "tools": [],
+        "structured_output": ResearchPlan,
+    }

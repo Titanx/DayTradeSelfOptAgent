@@ -9,11 +9,13 @@ pipeline 步骤:
   3. [review]        → 人工审查编辑提案（可选，默认跳过）
   4. applier         → 应用编辑到 skills/*.skill.md
   5. gate            → (手动) 在验证集重跑后调用 gate.py 比较准确率
+  6. evolve          → 收敛检测: 当 SkillOpt 多轮无法提升时，触发结构性发现
 
 用法:
   python opt/run_pipeline.py                        # 全自动模式 (无人工审查)
   python opt/run_pipeline.py --review               # 审查模式 (显示编辑后确认)
   python opt/run_pipeline.py --collect-only          # 只收集数据+归档轨迹
+  python opt/run_pipeline.py --evolve               # 强制运行结构性发现
   python opt/run_pipeline.py --status               # 查看状态（含轨迹版本列表）
 """
 
@@ -36,6 +38,7 @@ from opt.select import select as select_edits
 from opt.applier import apply_edits
 from opt.gate import gate
 from opt.debate_logger import save_trajectories, list_versions
+from opt.evolve import discover, record_run, detect_convergence, _load_accuracy_history
 
 
 def step_collect():
@@ -144,7 +147,8 @@ def step_status():
     print("-" * 40)
 
     for fname in ["rollout.json", "edits.json", "edits_aggregated.json",
-                   "edits_selected.json", "applied.json", "gate_result.json"]:
+                   "edits_selected.json", "applied.json", "gate_result.json",
+                   "discovery.json"]:
         fp = history_path / fname
         if fp.exists():
             data = json.loads(fp.read_text(encoding="utf-8"))
@@ -180,6 +184,22 @@ def step_status():
     else:
         print("  trajectories: NO VERSIONS")
 
+    # Evolution status
+    history = _load_accuracy_history()
+    if history:
+        print("  pipeline_history: {} runs".format(len(history)))
+        converged, reason = detect_convergence(history)
+        print("  convergence: {} — {}".format("CONVERGED" if converged else "improving", reason))
+        if converged:
+            discovery_path = PROJECT_DIR / "opt" / "output" / "discovery.json"
+            if discovery_path.exists():
+                disc = json.loads(discovery_path.read_text(encoding="utf-8"))
+                print("  discovery: {} proposals".format(len(disc.get("proposals", []))))
+            else:
+                print("  discovery: NOT YET RUN")
+    else:
+        print("  pipeline_history: NO DATA")
+
 
 def main():
     parser = argparse.ArgumentParser(description="SkillOpt Pipeline Runner")
@@ -187,6 +207,7 @@ def main():
     parser.add_argument("--collect-only", action="store_true", help="Only collect data + archive traces")
     parser.add_argument("--status", action="store_true", help="Show pipeline status (incl. trajectories)")
     parser.add_argument("--skip-optimize", action="store_true", help="Skip optimizer (use existing edits.json)")
+    parser.add_argument("--evolve", action="store_true", help="Force structural discovery (EvoSkill loop) even if not converged")
     args = parser.parse_args()
 
     if args.status:
@@ -203,19 +224,30 @@ def main():
     # Step 1: Collect
     step_collect()
 
+    # load rollout for tracking
+    rollout_path = PROJECT_DIR / "opt" / "input" / "rollout.json"
+    rollout_data = {}
+    if rollout_path.exists():
+        rollout_data = json.loads(rollout_path.read_text(encoding="utf-8"))
+
     if args.collect_only:
         step_log_trajectories(run_id)
+        record_run(run_id, rollout_data)
         print("--collect-only: done. Trajectory version: {}".format(run_id))
         return
 
     # Step 1.5: Archive debate trajectories
     step_log_trajectories(run_id)
 
+    applied_edits = False
+    edit_result = {}
+
     # Step 2: Optimize
     if not args.skip_optimize:
         edit_result = step_optimize()
         if edit_result is None:
             print("Optimizer failed. Pipeline stopped.")
+            record_run(run_id, rollout_data, edit_result, applied=False)
             return
 
         # Step 2a: Aggregate
@@ -231,10 +263,15 @@ def main():
         if args.review:
             if not step_review(edit_result):
                 print("Edits rejected by user. Pipeline stopped.")
+                record_run(run_id, rollout_data, edit_result, applied=False)
                 return
 
     # Step 4: Apply
     apply_result = step_apply()
+    applied_edits = len(apply_result.get("applied", [])) > 0
+
+    # Record this run
+    record_run(run_id, rollout_data, edit_result, applied=applied_edits)
 
     print("\n" + "=" * 60)
     print("Pipeline complete!")
@@ -243,6 +280,24 @@ def main():
     print("Backup: {}".format(apply_result.get("backup_dir", "N/A")))
     print("Trajectories: opt/trajectories/{}/".format(run_id))
     print("=" * 60)
+
+    # Step 5 (auto): 收敛检测 + EvoSkill 式发现
+    history = _load_accuracy_history()
+    converged, reason = detect_convergence(history)
+    print("\nConvergence check: {} — {}".format("CONVERGED" if converged else "OK", reason))
+
+    if converged or args.evolve:
+        print("\n" + "=" * 60)
+        print("Step 5: EvoSkill Discovery — structural analysis")
+        print("=" * 60)
+        discovery = discover(history, force=args.evolve)
+        if discovery.get("needs_structural_change"):
+            print("\n⚠️  STRUCTURAL CHANGE PROPOSED!")
+            for p in discovery.get("proposals", []):
+                print("  - {}: {}".format(p.get("type", ""), p.get("name", "")))
+            print("Review discovery.json before applying.")
+    else:
+        print("(EvoSkill loop not triggered — accuracy still improving)")
 
 
 if __name__ == "__main__":

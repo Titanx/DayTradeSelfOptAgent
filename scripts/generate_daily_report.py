@@ -7,48 +7,33 @@ from pathlib import Path
 from collections import defaultdict
 
 PROJECT_DIR = Path(__file__).parent.parent
+sys.path.insert(0, str(PROJECT_DIR))
 RESULTS_DIR = PROJECT_DIR / "data" / "results"
 REPORTS_DIR = PROJECT_DIR / "daily_reports"
 
-STOCKS = [
-    ("sh600438", "Tongwei", "Solar"),
-    ("sh601012", "LONGi", "Solar"),
-    ("sz300274", "Sungrow", "Solar"),
-    ("sz300751", "Maxwell", "Solar"),
-    ("sz002459", "JA", "Solar"),
-    ("sz002202", "Goldwind", "Wind"),
-    ("sh601615", "MingYang", "Wind"),
-    ("sh603606", "OrientCable", "Wind"),
-    ("sz300850", "Xinqianglian", "Wind"),
-    ("sz300129", "TSP", "Wind"),
-    ("sz002230", "iFlytek", "AI"),
-    ("sh688256", "Cambricon", "AI"),
-    ("sz300308", "Zhongji", "AI"),
-    ("sz300033", "Hithink", "AI"),
-    ("sh688041", "Hygon", "AI"),
-    ("sz300750", "CATL", "Energy"),
-    ("sz300014", "EVE", "Energy"),
-    ("sz002074", "Guoxuan", "Energy"),
-    ("sz300438", "GreatPower", "Energy"),
-    ("sz300073", "Easpring", "Energy"),
-    ("sz002415", "Hikvision", "Vision"),
-    ("sz002236", "Dahua", "Vision"),
-    ("sh603501", "WillSemi", "Vision"),
-    ("sz002456", "OFilm", "Vision"),
-    ("sh688400", "Luster", "Vision"),
-]
+from scripts.stock_universe import stocks_for_collector
+STOCKS = stocks_for_collector()
 
 RATING_EMOJI = {"Overweight": "OW", "Buy": "BUY", "Hold": "HOLD", "Underweight": "UW", "Sell": "SELL"}
 
 
 def get_kline(sid):
+    code = sid[2:]
+    if code.startswith(("6", "9")):
+        sid = "sh" + code
+    else:
+        sid = "sz" + code
     url = (
         "http://web.ifzq.gtimg.cn/appstock/app/fqkline/get"
-        "?param={sid},day,,,5,qfq".format(sid=sid)
+        "?param={sid},day,,,10,qfq".format(sid=sid)
     )
     req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
     resp = urllib.request.urlopen(req, timeout=10)
-    return json.loads(resp.read().decode("utf-8"))["data"][sid]["qfqday"]
+    data = json.loads(resp.read().decode("utf-8"))["data"][sid]
+    for key in ("qfqday", "day"):
+        if data.get(key):
+            return data[key]
+    return []
 
 
 def load_predictions(date_str):

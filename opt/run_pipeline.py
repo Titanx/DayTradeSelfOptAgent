@@ -207,6 +207,7 @@ def main():
     parser.add_argument("--collect-only", action="store_true", help="Only collect data + archive traces")
     parser.add_argument("--status", action="store_true", help="Show pipeline status (incl. trajectories)")
     parser.add_argument("--skip-optimize", action="store_true", help="Skip optimizer (use existing edits.json)")
+    parser.add_argument("--force-apply", action="store_true", help="Force apply edits even when accuracy >= threshold")
     parser.add_argument("--evolve", action="store_true", help="Force structural discovery (EvoSkill loop) even if not converged")
     args = parser.parse_args()
 
@@ -265,6 +266,31 @@ def main():
                 print("Edits rejected by user. Pipeline stopped.")
                 record_run(run_id, rollout_data, edit_result, applied=False)
                 return
+
+    # Step 3.5: Accuracy threshold guard
+    # 当准确率 >= 阈值时，保守策略已在回调日表现良好，
+    # 自动应用编辑可能破坏这种优势 → 仅收集数据，跳过 apply
+    ACCURACY_THRESHOLD = 70.0
+    current_accuracy = rollout_data.get("group_summary", {}).get("overall", {}).get("accuracy", 0)
+    history = _load_accuracy_history()
+    converge_status, converge_reason = detect_convergence(history)
+
+    if current_accuracy >= ACCURACY_THRESHOLD and not args.force_apply:
+        print("\n" + "=" * 60)
+        print("Step 3.5: Accuracy gate — {:.1f}% >= {:.0f}% threshold".format(
+            current_accuracy, ACCURACY_THRESHOLD))
+        print("=" * 60)
+        print("Current accuracy is strong. Applying edits at this level may")
+        print("degrade conservative behavior that works well in correction days.")
+        print("→ Skipping auto-apply. Use --force-apply to override.")
+        print("→ Trajectories archived at opt/trajectories/{}/".format(run_id))
+        print("→ Re-run pipeline when accuracy drops below {:.0f}%".format(ACCURACY_THRESHOLD))
+        record_run(run_id, rollout_data, edit_result, applied=False)
+        return
+
+    if current_accuracy >= ACCURACY_THRESHOLD and args.force_apply:
+        print("\n⚠️  Accuracy {:.1f}% >= {:.0f}% — --force-apply overriding gate".format(
+            current_accuracy, ACCURACY_THRESHOLD))
 
     # Step 4: Apply
     apply_result = step_apply()

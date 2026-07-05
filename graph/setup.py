@@ -118,8 +118,11 @@ class GraphSetup:
             risk_debate_state: Optional[Dict]
             final_decision: Optional[str]
             market_overview: Optional[str]     # EvoSkill v0.2: 大盘/板块共享数据
+            market_direction: Optional[str]    # 市场方向闸门: STRONG_BULL/BULL/NEUTRAL/BEAR/STRONG_BEAR + 闸门指令
+            sector_momentum: Optional[str]     # 板块动量: HOT/WARM/NEUTRAL 资金流入信号
             sector_context: Optional[str]      # EvoSkill v0.2: 板块特定上下文
             data_context: Optional[str]        # Phase 0: 预计算的完整数据 (解耦数据获取)
+            global_macro_report: Optional[str] # EvoSkill v0.4: 全球宏观分析 (美股/港股/VIX/汇率/商品)
 
         workflow = StateGraph(AgentState)
 
@@ -227,6 +230,7 @@ class GraphSetup:
         from agents.researchers.bull_researcher import (
             create_bull_researcher, create_bear_researcher, create_research_manager,
             create_reversal_analyst, create_sector_rotation_analyst,
+            create_global_macro_analyst,
         )
 
         def make_researcher_node(cfg, role_prefix: str):
@@ -298,6 +302,36 @@ class GraphSetup:
             response.content = content
             return {"messages": [response]}
         workflow.add_node("sector_rotation_analyst", sector_rotation_analyst_node)
+
+        # 全球宏观分析师 — EvoSkill v0.4，监控美股/港股/A50/VIX/汇率/商品
+        def global_macro_analyst_node(state: AgentState) -> dict:
+            cfg = create_global_macro_analyst(deep, self.config)
+            context = self._build_debate_context(state)
+            data_context = state.get("data_context", "")
+            if data_context:
+                context += "\n\n## 全球市场数据\n{}".format(data_context)
+
+            # 注入前序研究员结论摘要
+            summary_parts = []
+            for m in state.get("messages", []):
+                c = str(m.content)
+                if any(p in c for p in ["Bull:", "Bear:", "Reversal:", "Sector:"]):
+                    summary_parts.append(c[-500:])
+            if summary_parts:
+                context += "\n\n## 前序分析摘要\n" + "\n".join(summary_parts[-5:])
+
+            context += "\n\n请调用 get_global_macro_data() 获取全球市场数据，输出以 'Global: ' 开头的隔夜环境评估。"
+            messages = [SystemMessage(content=cfg["system_prompt"]),
+                       HumanMessage(content=context)]
+            response = deep.invoke(messages)
+            content = str(response.content)
+            if not content.startswith("Global:"):
+                content = "Global: " + content
+            response.content = content
+
+            # 提取报告存入 state
+            return {"messages": [response], "global_macro_report": content}
+        workflow.add_node("global_macro_analyst", global_macro_analyst_node)
 
         # 研究主管
         def research_manager_node(state: AgentState) -> dict:
@@ -417,9 +451,10 @@ class GraphSetup:
             "bear_researcher", cl.should_continue_debate,
             {"bull_researcher": "bull_researcher", "reversal_analyst": "reversal_analyst"}
         )
-        # 反弹分析师 → 板块轮动分析师 → 研究主管
+        # 反弹分析师 → 板块轮动分析师 → 全球宏观分析师 → 研究主管
         workflow.add_edge("reversal_analyst", "sector_rotation_analyst")
-        workflow.add_edge("sector_rotation_analyst", "research_manager")
+        workflow.add_edge("sector_rotation_analyst", "global_macro_analyst")
+        workflow.add_edge("global_macro_analyst", "research_manager")
 
         # Phase 3: 研究主管 → 交易员
         workflow.add_edge("research_manager", "trader")
@@ -517,6 +552,13 @@ class GraphSetup:
         if not sector_found:
             parts.append("(板块轮动分析师未产生评估)\n")
 
+        # 全球宏观分析 (EvoSkill v0.4)
+        global_macro = state.get("global_macro_report", "")
+        if global_macro:
+            parts.append("\n### 全球宏观环境\n")
+            parts.append(global_macro + "\n")
+            parts.append("【指令】请将全球宏观环境评估纳入你的研究计划，特别是VIX恐慌指数和A50期货信号对隔夜风险的影响。\n")
+
         parts.append("\n请综合以上所有信息，给出最终研究投资计划。")
         parts.append("\n特别关注: 1)反弹分析师是否发现了 Bull/Bear 忽略的超跌反弹机会;")
         parts.append(" 2)板块轮动分析师是否提供了板块级别的 Buy/Hold 信号。")
@@ -572,9 +614,28 @@ class GraphSetup:
         if overview:
             parts.append(f"### 大盘背景\n{overview[:600]}\n")
 
+        direction = state.get("market_direction", "")
+        if direction:
+            parts.append(f"### ⚠️ 市场方向闸门 (必须遵守)\n{direction}\n")
+
+        sector_momentum = state.get("sector_momentum", "")
+        if sector_momentum:
+            parts.append(f"### 板块动量信号\n本股票所属板块: {state.get('stock_name','')} → {sector_momentum}\n")
+            if "HOT" in sector_momentum:
+                parts.append("【板块动量指令】该板块为当日资金流入TOP-3，Bull论据可信度自动+20%。如果Bull给出买入信号且Bear反驳薄弱，应优先考虑Buy或Overweight。\n")
+
         sector_ctx = state.get("sector_context", "")
         if sector_ctx:
             parts.append(f"### 板块背景\n{sector_ctx[:400]}\n")
+
+        # 全球宏观环境 (EvoSkill v0.4)
+        global_macro = state.get("global_macro_report", "")
+        if global_macro:
+            parts.append(f"### 🌍 全球宏观隔夜环境\n{global_macro[:800]}\n")
+            if "Bearish" in global_macro:
+                parts.append("【全球宏观指令】隔夜外盘偏空，请优先评估隔夜风险。VIX高企或外盘大跌时，最多1个Buy且仓位≤10%。\n")
+            elif "Bullish" in global_macro:
+                parts.append("【全球宏观指令】隔夜外盘偏暖，全球风险偏好有利。可以更积极地寻找Buy机会。\n")
 
         # 所有分析报告
         for rpt_name, rpt_key in [

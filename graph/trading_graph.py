@@ -104,6 +104,7 @@ def _render_trace_md(symbol: str, stock_name: str, trade_date: str,
         prefix_map = {
             "Bull:": "📈", "Bear:": "📉",
             "Aggressive:": "🔥", "Conservative:": "🛡️", "Neutral:": "⚖️",
+            "Global:": "🌍",
         }
         emoji = ""
         for prefix, e in prefix_map.items():
@@ -368,8 +369,11 @@ class AStockTradingGraph:
             "risk_debate_state": {"count": 0},
             "final_decision": "",
             "market_overview": self.config.get("market_overview", ""),
+            "market_direction": self.config.get("market_direction", ""),
+            "sector_momentum": self.config.get("sector_momentum", ""),
             "sector_context": self.config.get("sector_context", ""),
             "data_context": self.config.get("data_context", ""),
+            "global_macro_report": "",
         }
 
         # 运行图
@@ -389,6 +393,7 @@ class AStockTradingGraph:
             "technical": final_state.get("technical_report", ""),
             "sentiment": final_state.get("sentiment_report", ""),
             "policy": final_state.get("policy_report", ""),
+            "global_macro": final_state.get("global_macro_report", ""),
         }
 
         result = {

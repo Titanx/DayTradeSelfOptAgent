@@ -12,7 +12,7 @@ import copy
 from pathlib import Path
 
 from dotenv import load_dotenv
-load_dotenv()
+load_dotenv(override=True)
 
 # ============================================================
 # 项目路径（所有缓存/结果/记忆均存放在项目目录 data/ 下）

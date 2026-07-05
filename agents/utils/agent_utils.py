@@ -611,3 +611,177 @@ POLICY_TOOLS = [
     get_market_sentiment_data,
     get_sector_fund_flow_data,
 ]
+
+
+# ============================================================
+# 全球宏观数据工具
+# ============================================================
+
+def get_global_macro_data() -> str:
+    """获取全球资本市场关键指标，用于评估隔夜外盘对次日A股的影响。
+
+    返回结构化的Markdown报告，包含:
+    - 美股三大指数 (标普500/纳斯达克/道琼斯)
+    - 恒生指数
+    - A50期货 (新加坡)
+    - VIX恐慌指数
+    - 美元/离岸人民币 (USDCNH)
+    - 原油/铜期货
+
+    所有数据采用三级回退: AKShare → 缓存 → 预报降级
+    """
+    lines = []
+    lines.append("# 全球宏观数据")
+    lines.append(f"生成时间: {datetime.now().strftime('%Y-%m-%d %H:%M')}")
+    lines.append("")
+
+    # --- 缓存键 ---
+    try:
+        from dataflows.market_cache import MarketDataCache
+        cache = MarketDataCache.get_instance()
+        trade_date = cache.get_trade_date()
+    except Exception:
+        trade_date = datetime.now().strftime("%Y-%m-%d")
+
+    cache_key = f"global_macro_{trade_date}"
+    try:
+        cached = cache.get_public_data(cache_key)
+        if cached:
+            return cached
+    except Exception:
+        pass
+
+    # ============================================================
+    # 1. 美股三大指数 (新浪接口)
+    # ============================================================
+    lines.append("## 美股三大指数 (最近交易日)")
+    us_indices = {
+        ".INX": "标普500",
+        ".IXIC": "纳斯达克",
+        ".DJI": "道琼斯",
+    }
+    us_data = {}
+    try:
+        import akshare as ak
+        us_df = ak.index_us_stock_sina(symbol=".INX")
+        if us_df is not None and not us_df.empty:
+            us_df.columns = us_df.columns.str.lower()
+            for code, name in us_indices.items():
+                try:
+                    df_sym = ak.index_us_stock_sina(symbol=code)
+                    if df_sym is not None and not df_sym.empty:
+                        last = df_sym.iloc[-1]
+                        close = float(last.get("close", 0))
+                        change_pct = float(last.get("pct_chg", 0)) if "pct_chg" in df_sym.columns else 0
+                        us_data[name] = {"close": close, "pct_chg": change_pct}
+                        emoji = "↑" if change_pct > 0 else ("↓" if change_pct < 0 else "→")
+                        lines.append(f"- {name}: {close:,.0f} {emoji}{change_pct:+.2f}%")
+                except Exception:
+                    lines.append(f"- {name}: 数据获取失败")
+    except Exception as e:
+        lines.append(f"- 美股数据不可用: {e}")
+
+    # ============================================================
+    # 2. 恒生指数
+    # ============================================================
+    lines.append("")
+    lines.append("## 恒生指数")
+    try:
+        hk_df = ak.stock_hk_index_daily_em(symbol="HSI")
+        if hk_df is not None and not hk_df.empty:
+            last = hk_df.iloc[-1]
+            hk_close = float(last.get("close", 0))
+            hk_pct = float(last.get("pct_chg", 0)) if "pct_chg" in hk_df.columns else 0
+            emoji = "↑" if hk_pct > 0 else ("↓" if hk_pct < 0 else "→")
+            lines.append(f"- 恒生指数: {hk_close:,.0f} {emoji}{hk_pct:+.2f}%")
+    except Exception:
+        lines.append("- 恒生指数: 数据不可用(非交易时间)")
+
+    # ============================================================
+    # 3. A50期货 (新浪)
+    # ============================================================
+    lines.append("")
+    lines.append("## A50期货 (新加坡)")
+    try:
+        a50_df = ak.futures_foreign_hist(symbol="XINA50")
+        if a50_df is not None and not a50_df.empty:
+            last = a50_df.iloc[-1]
+            a50_close = float(last.get("close", 0))
+            a50_pct = float(last.get("pct_chg", 0)) if "pct_chg" in a50_df.columns else 0
+            emoji = "↑" if a50_pct > 0 else ("↓" if a50_pct < 0 else "→")
+            lines.append(f"- A50期货: {a50_close:,.0f} {emoji}{a50_pct:+.2f}%")
+    except Exception:
+        lines.append("- A50期货: 数据不可用(非交易时间)")
+
+    # ============================================================
+    # 4. 美元/人民币 (USDCNH)
+    # ============================================================
+    lines.append("")
+    lines.append("## 美元/离岸人民币 (USDCNH)")
+    try:
+        fx_df = ak.fx_spot_quote()
+        if fx_df is not None and not fx_df.empty:
+            usdcnh_row = fx_df[fx_df["货币对"] == "美元/人民币" if "货币对" in fx_df.columns else fx_df.iloc[:, 0] == "美元/人民币"]
+            if not usdcnh_row.empty:
+                row = usdcnh_row.iloc[0]
+                rate = float(row.get("最新价", row.iloc[2] if len(row) > 2 else 0))
+                lines.append(f"- USDCNH: {rate:.4f}")
+            else:
+                lines.append("- USDCNH: 未找到")
+    except Exception:
+        lines.append("- USDCNH: 数据不可用")
+
+    # ============================================================
+    # 5. VIX 恐慌指数
+    # ============================================================
+    lines.append("")
+    lines.append("## VIX 恐慌指数")
+    try:
+        vix_df = ak.index_us_stock_sina(symbol=".VIX")
+        if vix_df is not None and not vix_df.empty:
+            last = vix_df.iloc[-1]
+            vix_val = float(last.get("close", 0))
+            if vix_val > 25:
+                zone = "恐慌 (>25) ⚠️ 全球风险偏好极低"
+            elif vix_val > 20:
+                zone = "担忧 (20-25) 市场谨慎"
+            elif vix_val > 15:
+                zone = "正常 (15-20)"
+            else:
+                zone = "极度平静 (<15) 风险偏好高"
+            lines.append(f"- VIX: {vix_val:.1f} — {zone}")
+    except Exception:
+        lines.append("- VIX: 数据不可用")
+
+    # ============================================================
+    # 6. 原油/铜期货
+    # ============================================================
+    lines.append("")
+    lines.append("## 关键商品")
+    commodity_map = {"CL": "WTI原油", "HG": "铜"}
+    for code, name in commodity_map.items():
+        try:
+            comm_df = ak.futures_foreign_hist(symbol=code)
+            if comm_df is not None and not comm_df.empty:
+                last = comm_df.iloc[-1]
+                cp = float(last.get("close", 0))
+                pct = float(last.get("pct_chg", 0)) if "pct_chg" in comm_df.columns else 0
+                emoji = "↑" if pct > 0 else ("↓" if pct < 0 else "→")
+                lines.append(f"- {name}: {cp:,.2f} {emoji}{pct:+.2f}%")
+        except Exception:
+            lines.append(f"- {name}: 数据不可用")
+
+    result = "\n".join(lines)
+
+    # --- 缓存 ---
+    try:
+        cache.store_public_data(cache_key, result)
+    except Exception:
+        pass
+
+    return result
+
+
+GLOBAL_MACRO_TOOLS = [
+    get_global_macro_data,
+]

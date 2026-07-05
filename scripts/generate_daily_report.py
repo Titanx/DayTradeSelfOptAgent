@@ -242,23 +242,27 @@ if backtest_date:
             )
 
         total = hit + avoid + miss + step
-        lines.append("| Metric | Value |")
-        lines.append("|--------|:--:|")
-        lines.append("| Total | {t} |".format(t=total))
-        lines.append("| HIT (Buy->up>=1%) | {h} |".format(h=hit))
-        lines.append("| AVOID (Hold->not up) | {a} |".format(a=avoid))
-        lines.append("| MISS (Buy->down/fail) | {m} |".format(m=miss))
-        lines.append("| STEP (Hold->up>=1%) | {s} |".format(s=step))
-        lines.append(
-            "| Accuracy | **{acc:.0f}%** |".format(acc=(hit + avoid) / total * 100)
-        )
-        if hit + miss > 0:
+        if total == 0:
+            lines.append("*无有效回测数据（下一个交易日尚未发生）*")
+            lines.append("")
+        else:
+            lines.append("| Metric | Value |")
+            lines.append("|--------|:--:|")
+            lines.append("| Total | {t} |".format(t=total))
+            lines.append("| HIT (Buy->up>=1%) | {h} |".format(h=hit))
+            lines.append("| AVOID (Hold->not up) | {a} |".format(a=avoid))
+            lines.append("| MISS (Buy->down/fail) | {m} |".format(m=miss))
+            lines.append("| STEP (Hold->up>=1%) | {s} |".format(s=step))
             lines.append(
-                "| Buy Precision | {h}/{t2} = {pct:.0f}% |".format(
-                    h=hit, t2=hit + miss, pct=hit / (hit + miss) * 100
-                )
+                "| Accuracy | **{acc:.0f}%** |".format(acc=(hit + avoid) / total * 100)
             )
-        lines.append("")
+            if hit + miss > 0:
+                lines.append(
+                    "| Buy Precision | {h}/{t2} = {pct:.0f}% |".format(
+                        h=hit, t2=hit + miss, pct=hit / (hit + miss) * 100
+                    )
+                )
+            lines.append("")
 
         lines.extend(table_lines)
         lines.append("")

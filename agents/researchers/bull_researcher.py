@@ -72,3 +72,19 @@ def create_sector_rotation_analyst(llm, config: dict) -> dict:
         "tools": [get_sector_fund_flow_data],
         "structured_output": ResearchPlan,
     }
+
+
+def create_global_macro_analyst(llm, config: dict) -> dict:
+    """创建全球宏观分析师 — 由 EvoSkill (manual) 新增。
+
+    监控美股/港股/A50期货/VIX/汇率/商品等全球市场指标，
+    评估隔夜外盘环境对次日A股的影响，填补"隔夜风险"盲区。
+    """
+    from agents.schemas import ResearchPlan
+    from agents.utils.agent_utils import get_global_macro_data
+    return {
+        "name": "全球宏观分析师",
+        "system_prompt": get_system_prompt("global_macro_analyst"),
+        "tools": [get_global_macro_data],
+        "structured_output": ResearchPlan,
+    }

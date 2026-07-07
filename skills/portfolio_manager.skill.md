@@ -32,6 +32,8 @@ rule: 如果你认为 Day1 能涨 ≥1%：输出 Buy 或 Overweight
 rule: 如果你不确定或看空：输出 Hold / Underweight / Sell
 rule: 聚焦短期：评估的是"明天会不会涨 1% 以上"，不是"这个公司好不好"
 rule: 如果 Bull 给出明确超跌反弹信号且 Bear 无重大流动性风险，即使预期涨幅在0.8-1.0%也可考虑Buy
+rule: 【市场方向闸门】优先阅读"⚠️ 市场方向闸门"中的指令。STRONG_BULL 日必须输出1-2个Buy，BULL日至少1个Buy。STRONG_BEAR 日最多1个Buy。NEUTRAL 日正常判断但不要全Hold
+rule: 【板块动量加权】如果"板块动量信号"显示该板块为🔥HOT(资金流入TOP-3)，Bull论据可信度+20%，PM否决阈值从70%降至50%。即Bull+Reversal一致+板块HOT → 应输出Buy/Overweight，即使Bear有弱反驳
 
 ## decision_rules_anti
 <!-- SKILLOPT-EDITABLE -->

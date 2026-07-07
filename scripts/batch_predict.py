@@ -45,6 +45,14 @@ SECTOR_DESCRIPTIONS = {
     "视觉": "计算机视觉/安防/车载视觉板块，受智慧城市、自动驾驶、AI+应用落地驱动。",
 }
 
+SECTOR_BOARD_KEYWORDS = {
+    "光伏": ["光伏", "太阳能"],
+    "风电": ["风电", "风能", "电力"],
+    "AI": ["人工智能", "AI", "半导体", "芯片", "算力", "计算机"],
+    "储能": ["电池", "储能", "锂电", "新能源"],
+    "视觉": ["光学", "电子", "安防", "机器视觉"],
+}
+
 CRITICAL_DATA = ["price"]
 
 PUBLIC_DATA_KEYS = ["market_sentiment", "north_flow", "sector_data", "sector_fund_flow"]
@@ -162,6 +170,132 @@ def _build_data_context(stock_data, public_data, market_overview):
     return "\n\n".join(parts)
 
 
+def compute_sector_momentum() -> dict:
+    """板块动量加权: 解析板块资金流，返回我们的5个板块是否在top-3。
+
+    调用已缓存的 route_to_vendor('get_sector_fund_flow') 获取结构化数据，
+    然后通过关键词匹配将东财行业板块映射到我们的5大板块。
+    晚间AKShare不稳定时，返回空dict跳过。
+
+    Returns: {"光伏": "HOT(资金流入排名2/60)", "风电": None, ...}
+    """
+    try:
+        from dataflows.interface import route_to_vendor
+        data = route_to_vendor("get_sector_fund_flow", config={}, days=3)
+        if not data or not isinstance(data, dict):
+            return {}
+    except Exception:
+        return {}
+
+    today_entries = data.get("today", [])
+    if not today_entries:
+        return {}
+
+    total_boards = len(today_entries)
+    sector_scores = {sector: {"rank": 99, "name": "", "pct": 0, "net_inflow": 0}
+                     for sector in SECTOR_BOARD_KEYWORDS}
+
+    for entry in today_entries[:20]:
+        board_name = entry.get("name", "")
+        rank = entry.get("rank", 99)
+        for our_sector, keywords in SECTOR_BOARD_KEYWORDS.items():
+            for kw in keywords:
+                if kw in board_name and rank < sector_scores[our_sector]["rank"]:
+                    sector_scores[our_sector] = {
+                        "rank": rank, "name": board_name,
+                        "pct": entry.get("pct_chg", 0),
+                        "net_inflow": entry.get("net_inflow", 0),
+                    }
+                    break
+
+    result = {}
+    for sector, info in sector_scores.items():
+        if info["rank"] <= 3:
+            result[sector] = (f"🔥HOT(资金流入排名{info['rank']}/{total_boards}, "
+                              f"净流入{info['net_inflow']/1e8:.1f}亿)")
+        elif info["rank"] <= 8:
+            result[sector] = (f"⚡WARM(资金流入排名{info['rank']}/{total_boards})")
+        elif info["rank"] <= 15:
+            result[sector] = f"NEUTRAL(排名{info['rank']}/{total_boards})"
+        else:
+            result[sector] = ""
+
+    return result
+
+
+
+def compute_market_signal(overview: dict) -> str:
+    """大方向闸门: 从大盘数据计算市场方向信号，注入PM上下文。
+    解决"全Hold"极端保守问题 — 反弹日强制输出至少1-2个Buy。
+    """
+    indices = overview.get("indices", {})
+    changes = []
+
+    # 主路径: 三大指数pct_chg
+    for name in ["上证指数", "深证成指", "创业板指"]:
+        info = indices.get(name, {})
+        pct = info.get("pct_chg", 0)
+        close = info.get("close")
+        if isinstance(pct, (int, float)) and abs(pct) < 20 and close is not None:
+            changes.append((name, pct))
+
+    if not changes:
+        # 回落: 从市场情绪推断 (up/down ratio)
+        sentiment_raw = overview.get("market_sentiment", "")
+        try:
+            if "up_count" in str(sentiment_raw):
+                import re
+                up = int(re.search(r"'up_count':\s*(\d+)", str(sentiment_raw)).group(1))
+                down = int(re.search(r"'down_count':\s*(\d+)", str(sentiment_raw)).group(1))
+                if up + down > 0:
+                    ratio = up / (up + down)
+                    if ratio > 0.65:
+                        changes.append(("全市场(涨跌比)", 1.5))
+                    elif ratio > 0.55:
+                        changes.append(("全市场(涨跌比)", 0.5))
+                    elif ratio < 0.35:
+                        changes.append(("全市场(涨跌比)", -1.5))
+                    elif ratio < 0.45:
+                        changes.append(("全市场(涨跌比)", -0.5))
+                    else:
+                        changes.append(("全市场(涨跌比)", 0.0))
+        except Exception:
+            pass
+
+    if not changes:
+        return "市场方向: NEUTRAL (数据不可用)"
+
+    avg_change = sum(c[1] for c in changes) / len(changes)
+    idx_detail = ", ".join(f"{n}{pct:+.2f}%" for n, pct in changes)
+    source_label = "涨跌比" if "涨跌比" in changes[0][0] else "三大指数平均涨"
+
+    if avg_change > 1.5:
+        signal = (f"市场方向: STRONG_BULL {idx_detail} "
+                  f"({source_label}{avg_change:+.1f}%)\n"
+                  f"【闸门指令】今日大盘强势反弹，明日大概率延续。"
+                  f"本批次分析中，你**必须**输出至少 1-2 个 Buy 或 Overweight。"
+                  f"选择 Bull 论据最充分、超跌反弹信号最明确的标的。不要全部 Hold。")
+    elif avg_change > 0.5:
+        signal = (f"市场方向: BULL {idx_detail} "
+                  f"({source_label}{avg_change:+.1f}%)\n"
+                  f"【闸门指令】今日大盘偏强，如果你发现 Bull 论据充分且 Bear 反驳薄弱的标的，"
+                  f"应输出至少 1 个 Buy 或 Overweight。不要全部 Hold。")
+    elif avg_change < -1.5:
+        signal = (f"市场方向: STRONG_BEAR {idx_detail} "
+                  f"({source_label}{avg_change:+.1f}%)\n"
+                  f"【闸门指令】今日大盘暴跌，继续保守：最多输出 1 个 Buy，"
+                  f"重点回避高位科技股。大部分应为 Hold。")
+    elif avg_change < -0.5:
+        signal = (f"市场方向: BEAR {idx_detail} "
+                  f"({source_label}{avg_change:+.1f}%)\n"
+                  f"【闸门指令】今日大盘偏弱，继续保守。But 对超跌反弹信号（Bull+Reversal一致）的标的仍可考虑 Buy。")
+    else:
+        signal = (f"市场方向: NEUTRAL {idx_detail} ({source_label}{avg_change:+.1f}%)\n"
+                  f"【闸门指令】大盘窄幅震荡，正常模式。按你自身的判断做出有区分度的 Buy/Hold 决策，不要全部 Hold。")
+
+    return signal
+
+
 def _validate_data(stock_data, public_data):
     missing = []
     for key in CRITICAL_DATA:
@@ -227,6 +361,18 @@ def main():
             idx_parts.append(f"{k}({v.get('close', '?')})")
         print(f"   指数: {', '.join(idx_parts)}")
 
+        # 1.5 市场方向信号 (大方向闸门)
+        market_direction = compute_market_signal(overview)
+        print(f"   {market_direction.split(chr(10))[0]}")
+
+        # 1.6 板块动量加权
+        sector_momentum = compute_sector_momentum()
+        hot_sectors = [s for s, v in sector_momentum.items() if v and "HOT" in v]
+        if hot_sectors:
+            print(f"   板块动量: {', '.join(f'{s}({sector_momentum[s][:15]})' for s in hot_sectors)}")
+        else:
+            print(f"   板块动量: 数据不可用(晚间AKShare)")
+
         # 2. 公共数据 (市场情绪/北向/板块/资金流)
         print(f"   公共数据: 市场情绪 + 北向资金 + 板块排行 + 资金流 ...")
         cache = MarketDataCache.get_instance()
@@ -277,6 +423,8 @@ def main():
         t0 = time.time()
         cfg = dict(config)
         cfg["market_overview"] = shared_overview
+        cfg["market_direction"] = market_direction
+        cfg["sector_momentum"] = sector_momentum.get(sector, "")
         cfg["sector_context"] = SECTOR_DESCRIPTIONS.get(sector, "")
         cfg["data_context"] = data_bundles.get(code, "")
         try:

@@ -1,6 +1,9 @@
-"""批量回测: 上周一到周四 (A股T+1真实约束)
-D+0预测 → D+1开盘买入 → D+2日内最高止盈(≥买入价+1%)
-HIT=看多+止盈成功 | MISS=看多+止盈失败 | AVOID=观望+未触发 | STEP=观望+涨≥1%
+"""批量回测 (A股T+1 + 止损)
+D+0预测 → D+1买入 → D+2卖出
+  HIT  = 看多 + D2高 ≥ 买+1% → 止盈
+  STOP = 看多 + D2低 ≤ 买-3% → 止损
+  FLAT = 看多 + 未触发 → 收盘平仓
+  AVOID = 观望 ok | STEP = 观望踏空
 """
 import json, urllib.request, sys
 from pathlib import Path
@@ -29,25 +32,26 @@ STOCKS = [
     ("688400","凌云光","视觉"),("688686","奥普特","视觉"),
 ]
 
-# 日期组: (标签, D0预测日, D1买入日, D2卖出日)
 DATE_GROUPS = [
-    ("6/29(一)", "2026-06-29", "2026-06-30", "2026-07-01"),
-    ("6/30(二)", "2026-06-30", "2026-07-01", "2026-07-02"),
-    ("7/1(三)",  "2026-07-01", "2026-07-02", "2026-07-03"),
-    ("7/2(四)",  "2026-07-02", "2026-07-03", "2026-07-06"),
-    ("7/3(五)",  "2026-07-03", "2026-07-06", "2026-07-07"),
+    ("6/29(一)","2026-06-29","2026-06-30","2026-07-01"),
+    ("6/30(二)","2026-06-30","2026-07-01","2026-07-02"),
+    ("7/1(三)","2026-07-01","2026-07-02","2026-07-03"),
+    ("7/2(四)","2026-07-02","2026-07-03","2026-07-06"),
+    ("7/3(五)","2026-07-03","2026-07-06","2026-07-07"),
 ]
 
 
 def get_klines(code):
-    c = code[2:] if len(code) > 6 else code
-    sid = ("sh" if c.startswith(("6","9")) else "sz") + c
-    url = "http://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param={sid},day,,,12,qfq".format(sid=sid)
+    c = code[2:] if len(code)>6 else code
+    sid = ("sh" if c.startswith(("6","9")) else "sz")+c
+    url = f"http://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param={sid},day,,,12,qfq"
     req = urllib.request.Request(url, headers={"User-Agent":"Mozilla/5.0"})
     try:
         resp = urllib.request.urlopen(req, timeout=10)
         data = json.loads(resp.read().decode("utf-8"))["data"][sid]
-        return {k[0]: (float(k[1]), float(k[2]), float(k[3])) for k in (data.get("qfqday") or data.get("day",[]))}
+        # (open, close, high, low)
+        return {k[0]:(float(k[1]),float(k[2]),float(k[3]),float(k[4]))
+                for k in (data.get("qfqday") or data.get("day",[]))}
     except:
         return {}
 
@@ -55,64 +59,54 @@ def get_klines(code):
 def load_pred(code, d0):
     for f in RESULTS_DIR.glob(f"{code}_{d0}_*analysis.cache.json"):
         d = json.loads(f.read_text(encoding="utf-8"))
-        return {"rating": d.get("rating","?"), "conf": d.get("confidence",0)}
-
-
-def pct(v1, v2):
-    return (v2/v1 - 1)*100
+        return {"rating":d.get("rating","?"),"conf":d.get("confidence",0)}
 
 
 print("=" * 78)
-print("  Batch回测: 上周一到周四 (A股T+1真实约束)")
-print("  D+0收盘预测 → D+1开盘买入 → D+2日内最高止盈(≥+1%)")
+print("  Batch回测 (T+1 + 止盈1% / 止损-3%)")
 print("=" * 78)
 
 all_results = {}
-
 for label, d0, d1, d2 in DATE_GROUPS:
-    hit = avoid = miss = step = 0
-    for code, name, sector in STOCKS:
-        pred = load_pred(code, d0)
-        k = get_klines(code)
-        if not pred or d0 not in k or d1 not in k or d2 not in k:
-            continue
-        is_bull = pred["rating"].lower() in ("buy","overweight")
-        open_buy, _, d2_high = k[d1][0], None, k[d2][2]
+    hit=avoid=step=flat=stop=0
+    for code,name,sector in STOCKS:
+        pred=load_pred(code,d0)
+        k=get_klines(code)
+        if not pred or d0 not in k or d1 not in k or d2 not in k: continue
+        is_bull=pred["rating"].lower() in ("buy","overweight")
+        d1o=k[d1][0]; d2h=k[d2][2]; d2l=k[d2][3]; d2c=k[d2][1]; d0c=k[d0][1]
+        hit_p=d1o*1.01; stop_p=d1o*0.97
+        step_trig=(d2h/d0c-1)*100>=1.0
 
-        can_exit = pct(open_buy, d2_high) >= 1.0
-        step_trigger = pct(k[d0][1], d2_high) >= 1.0
+        if is_bull and d2h>=hit_p:     hit+=1
+        elif is_bull and d2l<=stop_p:  stop+=1
+        elif is_bull:                   flat+=1
+        elif step_trig:                 step+=1
+        else:                           avoid+=1
 
-        if is_bull and can_exit:       hit += 1
-        elif is_bull:                   miss += 1
-        elif step_trigger:              step += 1
-        else:                           avoid += 1
+    valid=hit+avoid+flat+stop+step
+    bull=hit+stop+flat
+    pnl=hit*0.01 + stop*(-0.03)
+    # can't compute flat pnl in batch easily, skip for summary
+    all_results[label]={"N":valid,"HIT":hit,"STOP":stop,"FLAT":flat,
+        "AVOID":avoid,"STEP":step,"BULL":bull}
+    print(f"  {label}: 有效{valid} HIT={hit} STOP={stop} FLAT={flat} AVOID={avoid} STEP={step} | 看多{bull}只")
 
-    valid = hit + avoid + miss + step
-    acc = (hit+avoid)/valid*100 if valid else 0
-    buy_hit = f"{hit}/{hit+miss}" if hit+miss>0 else "-"
-
-    all_results[label] = {"N":valid, "HIT":hit, "AVOID":avoid, "MISS":miss, "STEP":step, "ACC":acc, "BUY":buy_hit}
-    print(f"\n  {label}: D0={d0} → D1={d1} → D2={d2}")
-    print(f"    有效:{valid} | HIT:{hit} AVOID:{avoid} MISS:{miss} STEP:{step} | 准确率:{acc:.0f}% | Buy命中:{buy_hit}")
-
-# ==== 汇总表 ====
-print(f"\n{'=' * 78}")
-print(f"  四天汇总")
-print(f"{'=' * 78}")
-print(f"  {'日期':<8} {'样本':<5} {'HIT':<5} {'AVOID':<6} {'MISS':<5} {'STEP':<5} {'准确率':<6} {'Buy命中':<8}")
-print(f"  {'─'*8} {'─'*5} {'─'*5} {'─'*6} {'─'*5} {'─'*5} {'─'*6} {'─'*8}")
+print(f"\n{'='*78}")
+print(f"  五 天  汇  总")
+print(f"{'='*78}")
+print(f"  {'日期':<8} {'样本':<4} {'HIT':<4} {'STOP':<5} {'FLAT':<5} {'AVOID':<5} {'STEP':<4} {'看多':<4}")
+print(f"  {'─'*8} {'─'*4} {'─'*4} {'─'*5} {'─'*5} {'─'*5} {'─'*4} {'─'*4}")
 for label in [g[0] for g in DATE_GROUPS]:
-    r = all_results[label]
-    print(f"  {label:<8} {r['N']:<5} {r['HIT']:<5} {r['AVOID']:<6} {r['MISS']:<5} {r['STEP']:<5} {r['ACC']:<5.0f}%  {r['BUY']:<8}")
-
-# 合计
-tN = sum(r["N"] for r in all_results.values())
-tH = sum(r["HIT"] for r in all_results.values())
-tA = sum(r["AVOID"] for r in all_results.values())
-tM = sum(r["MISS"] for r in all_results.values())
-tS = sum(r["STEP"] for r in all_results.values())
-tAcc = (tH+tA)/tN*100 if tN else 0
-tBuy = f"{tH}/{tH+tM}" if tH+tM>0 else "-"
-print(f"  {'─'*8} {'─'*5} {'─'*5} {'─'*6} {'─'*5} {'─'*5} {'─'*6} {'─'*8}")
-print(f"  {'合计':<8} {tN:<5} {tH:<5} {tA:<6} {tM:<5} {tS:<5} {tAcc:<5.0f}%  {tBuy:<8}")
+    r=all_results[label]
+    print(f"  {label:<8} {r['N']:<4} {r['HIT']:<4} {r['STOP']:<5} {r['FLAT']:<5} {r['AVOID']:<5} {r['STEP']:<4} {r['BULL']:<4}")
+tN=sum(r["N"] for r in all_results.values())
+tH=sum(r["HIT"] for r in all_results.values())
+tS=sum(r["STOP"] for r in all_results.values())
+tF=sum(r["FLAT"] for r in all_results.values())
+tA=sum(r["AVOID"] for r in all_results.values())
+tSt=sum(r["STEP"] for r in all_results.values())
+tB=sum(r["BULL"] for r in all_results.values())
+print(f"  {'─'*8} {'─'*4} {'─'*4} {'─'*5} {'─'*5} {'─'*5} {'─'*4} {'─'*4}")
+print(f"  {'合计':<8} {tN:<4} {tH:<4} {tS:<5} {tF:<5} {tA:<5} {tSt:<4} {tB:<4}")
 print()

@@ -15,15 +15,24 @@
 
 > 成本随 DeepSeek 官方定价波动，以上为 2026 年 6 月参考值。
 
-## 策略说明：一日游 (One-Day Swing)
+## 策略说明：T+1 一日游 (One-Day Swing, v0.4)
 
 ```
-Day 0 (收盘后)  →  9-Agent 分析评估  →  决定 Day 1 是否买入
-Day 1 (次日)    →  开盘买入（如果决策为 Buy/Overweight）
-Day 2 (第三日)  →  收盘前强制平仓，无论盈亏
+D+0 (当日收盘后)  →  15-Agent 多空辩论 →  PM 决策 Buy/Hold
+D+1 (次日开盘)    →  开盘买入 (仅 Buy/Overweight 信号)
+D+2 (第三日)      →  止盈/止损/收盘平仓
 ```
 
-**硬约束**：只做多/不做空，单票仓位 ≤ 30%，Day1 涨幅预期 ≥ 1%（成本 0.11%），流动性过滤（日成交额 ≥ 1 亿、禁止 ST、回避跌停/停牌）。
+| 规则 | 参数 |
+|:--|:--|
+| 止盈退出 | D+2 日内最高 ≥ 买入价+1% → 获利平仓 |
+| 止损退出 | D+2 日内最低 ≤ 买入价-3% → 强制平仓 |
+| 默认平仓 | 未触发止盈/止损 → D+2 收盘强制平仓 |
+| 仓位约束 | 单票 ≤ 20%总仓，多信号等比压缩至 100% |
+| 只做多 | 不做空、不融券，放弃下跌段 |
+| 流动性过滤 | 日成交额 ≥ 1 亿，禁止 ST，回避跌停/停牌 |
+
+> **为什么设 1% 止盈**: A股印花税+佣金 ≈ 0.11%，1% 利润覆盖 9 倍成本。7/3~7/9 三轮实盘累计 +3 止盈 vs 6 止损，止盈赚太少的根本原因是信号质量而非止盈线太窄。
 
 ## 策略设计理念
 
@@ -75,41 +84,50 @@ Day 2 (第三日)  →  收盘前强制平仓，无论盈亏
 
 ---
 
-## 架构概览 (9-Agent)
+## 架构概览 (15-Agent, v0.4)
 
 ```
 用户输入（股票代码）
        │
        ▼
-┌─────────────────────────────────────┐
-│         第一阶段：信息收集            │
-│  基本面 │ 技术面 │ 舆论情绪 │ 政策面    │
-└─────────────────────────────────────┘
+┌──────────────────────────────────────────┐
+│          Phase 0: 大盘研判                 │
+│   market_direction → sector_rotation      │
+│              ↓                            │
+│   🌍 global_macro_analyst (美股/港股/A50/  │
+│      VIX/汇率/商品)  ← EvoSkill v0.4 新增  │
+└──────────────────────────────────────────┘
        │
        ▼
-┌─────────────────────────────────────┐
-│         第二阶段：多空辩论            │
-│     Bull Researcher ⟷ Bear Researcher│
-│              ↓                       │
-│      Reversal Analyst (反弹视角)      │
-│              ↓                       │
-│        Research Manager 汇总          │
-└─────────────────────────────────────┘
+┌──────────────────────────────────────────┐
+│          Phase 1: 信息收集                 │
+│   基本面 │ 技术面 │ 舆论情绪 │ 政策面       │
+└──────────────────────────────────────────┘
        │
        ▼
-┌─────────────────────────────────────┐
-│         第三阶段：一日游交易决策        │
-│         Trader（Day1买入 Day2强制平仓）  │
-└─────────────────────────────────────┘
+┌──────────────────────────────────────────┐
+│          Phase 2: 多空辩论                 │
+│     Bull Researcher ⟷ Bear Researcher     │
+│              ↓                            │
+│      Reversal Analyst (反弹视角)           │
+│              ↓                            │
+│        Research Manager 汇总              │
+└──────────────────────────────────────────┘
        │
        ▼
-┌─────────────────────────────────────┐
-│         第四阶段：风控讨论            │
-│  Aggressive ⟷ Conservative ⟷ Neutral │
-│              ↓                       │
-│       Portfolio Manager 最终决策      │
-│    Buy=Day1买入 / Hold=不参与        │
-└─────────────────────────────────────┘
+┌──────────────────────────────────────────┐
+│          Phase 3: 交易决策                 │
+│         Trader (D+1买 D+2止盈/止损/平仓)    │
+└──────────────────────────────────────────┘
+       │
+       ▼
+┌──────────────────────────────────────────┐
+│          Phase 4: 风控讨论                 │
+│  Aggressive ⟷ Conservative ⟷ Neutral      │
+│              ↓                            │
+│       Portfolio Manager 最终决策           │
+│   Buy=D+1买入 / Hold=不参与               │
+└──────────────────────────────────────────┘
 ```
 
 ## 快速开始
@@ -157,9 +175,12 @@ python opt/evolve.py --force           # 强制运行结构性发现
 ```
 DayTradeSelfOptAgent/
 ├── skills/                         # Agent Prompt (SkillOpt 可编辑)
+│   ├── market_direction.skill.md
+│   ├── sector_rotation.skill.md
+│   ├── global_macro_analyst.skill.md  # 🆕 EvoSkill v0.4: 全球宏观分析
 │   ├── bull_researcher.skill.md
 │   ├── bear_researcher.skill.md
-│   ├── reversal_analyst.skill.md   # 🆕 EvoSkill 发现: 反弹分析师
+│   ├── reversal_analyst.skill.md   # 🆕 EvoSkill v0.2: 反弹分析师
 │   ├── research_manager.skill.md
 │   ├── trader.skill.md
 │   ├── aggressive_risk.skill.md
@@ -167,10 +188,10 @@ DayTradeSelfOptAgent/
 │   ├── neutral_risk.skill.md
 │   └── portfolio_manager.skill.md
 ├── agents/
-│   ├── analysts/              # 4 个分析师
+│   ├── analysts/              # 5 个分析师 (含market_direction/sector_rotation/global_macro)
 │   ├── researchers/           # 多空研究员 + 反弹分析师
 │   ├── risk_mgmt.py           # 风控讨论 + 投资经理终决
-│   ├── trader.py              # 一日游交易员
+│   ├── trader.py              # T+1 交易员 (含止盈/止损)
 │   ├── schemas.py             # Pydantic 数据模型
 │   ├── skill_loader.py        # SkillOpt Prompt 加载器
 │   └── utils/
@@ -197,6 +218,8 @@ DayTradeSelfOptAgent/
 │   ├── stock_universe.py      # 统一股票配置 (50只)
 │   ├── market_overview.py     # 大盘数据预加载
 │   ├── generate_daily_report.py
+│   ├── batch_backtest.py      # 批量回测 (HIT/STOP/FLAT/AVOID/STEP + 止损)
+│   ├── _pnl.py                # 100万实盘模拟盈亏 (含仓位归一化)
 │   ├── backtest_day.py
 │   ├── backtest_multiday.py
 │   ├── backfill_dates.py
@@ -221,14 +244,20 @@ DayTradeSelfOptAgent/
 
 > 统一配置在 [scripts/stock_universe.py](scripts/stock_universe.py)，所有脚本自动引用。
 
-## 回测记录
+## 回测记录 (T+1 + 止盈1%/止损-3%)
 
-| 日期 | 准确率 | HIT | STEP | MISS | 架构 |
-|------|:--:|:--:|:--:|:--:|------|
-| 06-22→23 | 96% | 0 | 1 | 0 | 原始 8-agent |
-| 06-23→24 | 60% | 0 | 10 | 0 | SkillOpt 首次优化 |
-| 06-24→25 | 60% | 2 🆕 | 6 | 4 | 门槛放宽 |
-| 06-25→26 | 88% 🔥 | 0 | 3 | 0 | 9-agent (含 reversal_analyst) |
+| 轮次 | 架构 | 样本 | HIT | STOP | AVOID | STEP | 准确率 | 100万盈亏 |
+|:--|:--|:--|:--|:--|:--|:--|:--|:--|
+| 6/29→7/1 | v0.3 9-agent | 50 | 3 | 0 | 9 | 38 | 24% | — |
+| 6/30→7/2 | v0.3 | 50 | 0 | 1 | 20 | 29 | 42% | — |
+| 7/1→7/3 | v0.3 | 25 | 0 | 0 | 12 | 13 | 48% | — |
+| 7/2→7/6 | v0.3 | 50 | 0 | 0 | 19 | 31 | 38% | — |
+| **7/3→7/7** | **v0.4** 🔥 | 25 | 3 | 4 | 13 | 4 | **64%** | **-1.29%** |
+| 7/6→7/8 | v0.4 | 25 | 0 | 1 | 14 | 10 | 56% | -3.02% |
+| 7/7→7/9 | v0.4 | 25 | 1 | 1 | 13 | 10 | 56% | -1.12% |
+| **合计** | | **200** | **7** | **7** | **73** | **115** | **40%** | |
+
+> v0.4 = 首次引入 global_macro_analyst。7/3 全周唯一有止盈的天，准确率 64% 全周最高。
 
 ## License
 

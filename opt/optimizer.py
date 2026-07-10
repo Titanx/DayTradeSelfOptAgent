@@ -23,8 +23,8 @@ INPUT_DIR = PROJECT_DIR / "opt" / "input"
 OUTPUT_DIR = PROJECT_DIR / "opt" / "output"
 SKILLS_DIR = PROJECT_DIR / "skills"
 
-MAX_RETRIES = 3
-RETRY_DELAY = 5.0
+MAX_RETRIES = 5
+RETRY_DELAY = 15.0
 
 
 def _create_optimizer_llm():

@@ -52,9 +52,10 @@ def _render_value(data: Any, level: int = 1) -> str:
     if isinstance(data, list):
         if not data:
             return "*空列表*"
-        if all(isinstance(item, dict) for item in data[:1]):
+        # 检查所有元素是否都是 dict（避免异构列表崩溃）
+        if all(isinstance(item, dict) for item in data):
             return _records_to_table(data)
-        # 普通列表
+        # 普通列表（含异构）
         rows = []
         for i, item in enumerate(data, 1):
             if isinstance(item, dict):
@@ -102,10 +103,20 @@ def _dict_to_sections(d: dict, level: int = 1) -> str:
 
 
 def _records_to_table(records: list) -> str:
-    """list[dict] → Markdown 表格"""
+    """list[dict] → Markdown 表格
+
+    合并所有记录的 keys 作为表头（避免异构 dict 丢失字段）。
+    """
     if not records:
         return "*空*"
-    keys = list(records[0].keys())
+    # 收集所有记录中出现过的 key（保持首次出现顺序）
+    keys = []
+    seen = set()
+    for rec in records:
+        for k in rec.keys():
+            if k not in seen:
+                seen.add(k)
+                keys.append(k)
     rows = []
     rows.append("| " + " | ".join(str(k) for k in keys) + " |")
     rows.append("|" + "|".join("------" for _ in keys) + "|")

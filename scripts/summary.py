@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 
-results_dir = Path(r"c:\Users\44263\Documents\xhl\skills\量化交易\AStockAgent\data\results")
+results_dir = Path(__file__).parent.parent / "data" / "results"
 files = sorted(results_dir.glob("*_analysis.cache.json"))
 
 print(f"总计: {len(files)}/25 完成\n")

@@ -129,6 +129,10 @@ class MarketDataCache:
     def set_trade_date(self, trade_date: str):
         self._trade_date = trade_date
 
+    def get_trade_date(self) -> str:
+        """获取当前缓存交易日（若未设置则返回空字符串）"""
+        return self._trade_date
+
     def get_public_data(self, key: str) -> Optional[Any]:
         """通用键值缓存（不限 method 语义，任意 key → 内存+磁盘回退）"""
         if key in self._memory:

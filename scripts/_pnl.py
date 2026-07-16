@@ -2,7 +2,7 @@
 import json,re
 from pathlib import Path
 
-RR=Path(r"c:\Users\44263\Documents\xhl\skills\量化交易\AStockAgent\data\results")
+RR = Path(__file__).parent.parent / "data" / "results"
 TOTAL=1_000_000
 
 # (code, name, d1_open, d2_high, d2_low, d2_close)

@@ -33,7 +33,6 @@ import sys
 from pathlib import Path
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple
-from collections import defaultdict
 
 PROJECT_DIR = Path(__file__).parent.parent
 sys.path.insert(0, str(PROJECT_DIR))
@@ -302,19 +301,43 @@ def discover(history: List[Dict] = None, force: bool = False) -> dict:
     config = get_config()
     model = config.get("deep_think_llm", "deepseek-chat")
 
-    api_key = os.environ.get("DEEPSEEK_API_KEY")
-    base_url = os.environ.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1")
-    if not api_key:
-        return {
-            "converged": True, "reason": reason,
-            "needs_structural_change": False,
-            "analysis": "DEEPSEEK_API_KEY not set",
-            "proposals": [], "error": "missing API key",
-        }
+    # 复用 optimizer 的 LLM 工厂，支持 deepseek/openai/qwen/ollama 等多 provider
+    try:
+        from opt.optimizer import _create_optimizer_llm
+        llm_opt = _create_optimizer_llm()
+        api_key = "available"
+    except Exception as _e:
+        # 回退：直接读 DeepSeek 环境变量
+        api_key = os.environ.get("DEEPSEEK_API_KEY")
+        if not api_key:
+            return {
+                "converged": True, "reason": reason,
+                "needs_structural_change": False,
+                "analysis": "DEEPSEEK_API_KEY not set",
+                "proposals": [], "error": "missing API key",
+            }
+        llm_opt = None
 
+    base_url = os.environ.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1")
     import requests
 
     def _call_deepseek(system: str, user: str) -> dict:
+        # 优先用 optimizer LLM 工厂（支持多 provider）
+        if llm_opt is not None:
+            try:
+                from langchain_core.messages import HumanMessage, SystemMessage
+                messages = [SystemMessage(content=system), HumanMessage(content=user)]
+                resp_text = llm_opt.invoke(messages).content
+                import json as _json
+                # 尝试解析 JSON
+                try:
+                    return _json.loads(resp_text)
+                except Exception:
+                    # 包裹为标准响应格式
+                    return {"choices": [{"message": {"content": resp_text}}]}
+            except Exception:
+                pass
+        # 回退：直接 HTTP 调用 DeepSeek
         resp = requests.post(
             "{}/chat/completions".format(base_url.rstrip("/")),
             headers={
@@ -327,7 +350,7 @@ def discover(history: List[Dict] = None, force: bool = False) -> dict:
                     {"role": "system", "content": system},
                     {"role": "user", "content": user},
                 ],
-                "temperature": 0.1,
+                "temperature": config.get("temperature", 0.1),
                 "max_tokens": 3000,
                 "response_format": {"type": "json_object"},
             },
@@ -338,13 +361,16 @@ def discover(history: List[Dict] = None, force: bool = False) -> dict:
 
     system_prompt = """You are an Agent Architecture Analyst for a multi-agent stock trading system.
 
-The system has 8 agents in a pipeline:
-  Fundamental Analyst → Technical Analyst → Sentiment Analyst → Policy Analyst
-  → Bull Researcher ↔ Bear Researcher → Research Manager
-  → Trader → Aggressive Risk ↔ Conservative Risk ↔ Neutral Risk → Portfolio Manager
+The system has 13+ agents in a pipeline:
+  Phase 1 (Analysts): Fundamental Analyst → Technical Analyst → Sentiment Analyst → Policy Analyst
+  Phase 2 (Researchers): Bull Researcher ↔ Bear Researcher (debate)
+    → Reversal Analyst (EvoSkill discovery) → Sector Rotation Analyst → Global Macro Analyst
+    → Research Manager
+  Phase 3 (Trader): Trader
+  Phase 4 (Risk + PM): Aggressive Risk ↔ Conservative Risk ↔ Neutral Risk (3-way debate) → Portfolio Manager
 
 SkillOpt has been optimizing each agent's .skill.md files for several iterations,
-but accuracy has plateaued. Your job is to determine if the current 8-agent
+but accuracy has plateaued. Your job is to determine if the current 13+-agent
 ARCHITECTURE itself is insufficient, and if so, what structural change is needed.
 
 ## Analysis Rules
@@ -461,8 +487,8 @@ if __name__ == "__main__":
     for h in history:
         print("  {} acc={}% (H:{hit} A:{avoid} M:{miss} S:{step}) applied={app}".format(
             h.get("run_id", "?")[-12:], h.get("accuracy", 0),
-            hit=h.get("hit", 0), a=h.get("avoid", 0),
-            m=h.get("miss", 0), s=h.get("step", 0),
+            hit=h.get("hit", 0), avoid=h.get("avoid", 0),
+            miss=h.get("miss", 0), step=h.get("step", 0),
             app=h.get("edits_applied", False),
         ))
 

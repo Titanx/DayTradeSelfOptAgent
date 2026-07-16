@@ -29,7 +29,8 @@ try:
     names_df = ak.stock_board_industry_name_ths()
     sector_names = names_df["name"].tolist()
 except Exception:
-    cache_path = (Path("c:/Users/44263/Documents/xhl/skills/量化交易/AStockAgent/data/market_cache")
+    # 回退到本地缓存（路径相对项目根目录，避免硬编码绝对路径）
+    cache_path = (Path(__file__).parent.parent / "data" / "market_cache"
                   / f"{TODAY}_get_sector_boards.cache.json")
     data = json.loads(cache_path.read_text(encoding="utf-8"))
     sector_names = list({r["板块"] for r in data})

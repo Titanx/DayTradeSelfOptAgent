@@ -218,7 +218,7 @@ class AStockTradingGraph:
             self.config.get("deep_think_llm", "deepseek-chat")
         )
         backend = self.config.get("backend_url")
-        temperature = self.config.get("temperature", 0.3)
+        temperature = self.config.get("temperature", 0.1)
 
         api_key = None
         base_url = backend
@@ -431,8 +431,8 @@ class AStockTradingGraph:
             data = route_to_vendor("get_stock_realtime", symbol)
             if data and data.get("name"):
                 return data["name"]
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"股票名称解析失败 [{symbol}]: {e}")
         return ""
 
     def _settle_pending_returns(self, symbol: str, trade_date: str) -> None:
@@ -482,10 +482,15 @@ class AStockTradingGraph:
                 entry_price = close_prices.get(decision_clean)
                 exit_price = close_prices.get(settle_clean)
                 if exit_price is None:
-                    # 用最接近的交易日
-                    nearby = sorted([d for d in close_prices if d <= settle_clean])
-                    if nearby:
-                        exit_price = close_prices[nearby[-1]]
+                    # 周末/节假日场景：优先取 settle_clean 之后的下一个交易日（Day2强制平仓）
+                    # 若无下一个交易日，回退到之前最近交易日
+                    future = sorted([d for d in close_prices if d > settle_clean])
+                    if future:
+                        exit_price = close_prices[future[0]]
+                    else:
+                        nearby = sorted([d for d in close_prices if d <= settle_clean])
+                        if nearby:
+                            exit_price = close_prices[nearby[-1]]
 
                 if entry_price is None or exit_price is None:
                     continue
@@ -546,8 +551,8 @@ class AStockTradingGraph:
         if conf_match:
             try:
                 confidence = float(conf_match.group(1)) / 100
-            except ValueError:
-                pass
+            except ValueError as e:
+                logger.debug(f"confidence 解析失败: {e}")
 
         # 2. 如果 Markdown 没匹配到，尝试 JSON 格式回退
         if rating == "Hold" and action == "Hold" and confidence == 0.5:
@@ -561,8 +566,8 @@ class AStockTradingGraph:
                     rating = data.get("rating", "Hold")
                     action = data.get("action", data.get("rating", "Hold"))
                     confidence = float(data.get("confidence", 0.5))
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"JSON 决策解析失败，使用默认值: {e}")
 
         # 3. 标准化
         rating_map = {

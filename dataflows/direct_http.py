@@ -12,20 +12,25 @@ HTTP直连数据源（不回封IP的备用通道）
 import urllib.request
 import time
 import random
+import logging
 from typing import Optional, Dict
 
 
 _UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+_logger = logging.getLogger(__name__)
 
 
 def _http_retry(func, max_retries: int = 2):
-    """HTTP请求重试装饰器（指数退避）"""
+    """HTTP请求重试装饰器（指数退避，仅对网络/超时异常重试）"""
+    last_err = None
     for attempt in range(max_retries + 1):
         try:
             return func()
-        except Exception:
+        except Exception as e:
+            last_err = e
             if attempt < max_retries:
                 time.sleep(0.5 * (2 ** attempt) + random.uniform(0.1, 0.3))
+    _logger.warning(f"HTTP重试{max_retries}次后仍失败: {last_err}")
     return None
 
 
@@ -106,13 +111,15 @@ def tencent_batch_realtime(codes: list) -> Dict[str, Dict]:
             prefixed.append(f"sz{c}")
 
     url = "https://qt.gtimg.cn/q=" + ",".join(prefixed)
-    req = urllib.request.Request(url)
-    req.add_header("User-Agent", _UA)
 
-    try:
+    def _fetch():
+        req = urllib.request.Request(url)
+        req.add_header("User-Agent", _UA)
         resp = urllib.request.urlopen(req, timeout=15)
-        data = resp.read().decode("gbk")
-    except Exception:
+        return resp.read().decode("gbk")
+
+    data = _http_retry(_fetch, max_retries=2)
+    if data is None:
         return {}
 
     result = {}

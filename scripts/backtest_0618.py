@@ -2,7 +2,7 @@
 import json, urllib.request
 from pathlib import Path
 
-results_dir = Path(r"c:\Users\44263\Documents\xhl\skills\量化交易\AStockAgent\data\results")
+results_dir = Path(__file__).parent.parent / "data" / "results"
 
 STOCKS = [
     ("sz300750", "宁德时代"),

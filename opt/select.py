@@ -16,6 +16,7 @@ SkillOpt Step 2b: 对 aggregate 后的编辑进行多维评分，只保留得分
 """
 
 import json
+import re
 from pathlib import Path
 from datetime import datetime
 from typing import Dict, List
@@ -85,18 +86,18 @@ def _score_specificity(edit: dict) -> float:
     score = 0
     text = edit.get("new", "") or edit.get("old", "")
 
-    if any(c.isdigit() for c in text):
+    # 检测 A股代码（6位连续数字）— 比单纯"含数字"更精确
+    if re.search(r'(?<!\d)\d{6}(?!\d)', text):
         score += 8
-
-    stock_codes = sum(1 for c in text if c.isdigit()) >= 4
-    if stock_codes:
-        score += 8
+    # 检测具体数值条件（百分比/价格，如 "10%"、"50元"、"0.5"）
+    elif re.search(r'\d+(\.\d+)?\s*[%％]', text) or re.search(r'\d+(\.\d+)?\s*[元万]', text):
+        score += 5
 
     conditions = ["如果", "若", "当", "连续", "调整后", "突破", "反弹", "资金"]
     condition_count = sum(1 for c in conditions if c in text)
     score += min(9, condition_count * 3)
 
-    if "%" in text:
+    if "%" in text or "％" in text:
         score += 5
 
     return min(25, score)

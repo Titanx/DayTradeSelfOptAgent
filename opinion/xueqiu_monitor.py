@@ -26,17 +26,18 @@ _XUEQIU_CHECKED = False
 
 
 def _get_xueqiu_channel():
-    """懒加载雪球Channel（支持运行时恢复）"""
+    """懒加载雪球Channel（失败后允许下次重试，支持运行时恢复）"""
     global _XUEQIU_CHANNEL, _XUEQIU_CHECKED
     if _XUEQIU_CHECKED:
         return _XUEQIU_CHANNEL
-    _XUEQIU_CHECKED = True
     try:
         _agent_reach_path = Path(__file__).parent.parent.parent / "Agent-Reach"
         if str(_agent_reach_path) not in sys.path:
             sys.path.insert(0, str(_agent_reach_path))
         from agent_reach.channels.xueqiu import XueqiuChannel
         _XUEQIU_CHANNEL = XueqiuChannel()
+        # 仅在成功时标记，失败后允许下次重试
+        _XUEQIU_CHECKED = True
     except Exception as e:
         logger.warning(f"Agent-Reach 雪球Channel 导入失败: {e}，将使用HTTP回退")
     return _XUEQIU_CHANNEL

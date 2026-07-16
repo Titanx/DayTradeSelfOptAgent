@@ -39,7 +39,12 @@ def backup_skills():
 
 
 def parse_skill_sections(content: str) -> Dict[str, List[str]]:
-    """解析 skill 文件的 section → 行列表。只返回 SKILLOPT-EDITABLE 区域内的行。"""
+    """解析 skill 文件的 section → 行列表。只返回 SKILLOPT-EDITABLE 区域内的行。
+
+    SKILLOPT-EDITABLE 标记以 toggle 方式工作：第1次遇到开启可编辑区域，
+    第2次关闭，第3次再开启…… 成对标记能正确界定边界；单个标记则从该处
+    一直延伸到文件末尾。
+    """
     sections = {}
     current_section = None
     in_editable = False
@@ -50,7 +55,8 @@ def parse_skill_sections(content: str) -> Dict[str, List[str]]:
             sections[current_section] = []
             continue
         if "SKILLOPT-EDITABLE" in line:
-            in_editable = True
+            # toggle：成对标记的开/关
+            in_editable = not in_editable
             continue
         if in_editable:
             if current_section:
@@ -68,13 +74,16 @@ def apply_edit_to_content(content: str, edit: dict) -> str:
         new_rule = edit.get("new", "").strip()
         if not new_rule:
             return content
+        # 保留原始前缀（rule: 或 anti:），避免 anti 规则被错误转为 rule
+        original_prefix = "rule: "
         for prefix in ["rule: ", "anti: "]:
             if new_rule.startswith(prefix):
                 new_rule = new_rule[len(prefix):].strip()
+                original_prefix = prefix
                 break
 
         # 去重: 如果文件中已存在相同内容，跳过
-        normalized_rule = "rule: " + new_rule
+        normalized_rule = original_prefix + new_rule
         for line in lines:
             if line.strip() == normalized_rule:
                 return content
@@ -99,11 +108,11 @@ def apply_edit_to_content(content: str, edit: dict) -> str:
         for i in range(insert_pos - 1, target_line, -1):
             stripped = lines[i].strip()
             if stripped.startswith("rule:") or stripped.startswith("anti:"):
-                lines.insert(i + 1, "rule: " + new_rule)
+                lines.insert(i + 1, original_prefix + new_rule)
                 return "\n".join(lines)
 
         # 没找到 rule 行，在 section header 后插入
-        lines.insert(target_line + 1, "rule: " + new_rule)
+        lines.insert(target_line + 1, original_prefix + new_rule)
         return "\n".join(lines)
 
     elif action == "delete":

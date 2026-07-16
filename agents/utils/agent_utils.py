@@ -6,7 +6,7 @@ Agent 工具函数
 """
 
 import logging
-from typing import Dict, List, Any, Optional, Callable
+from typing import Dict, List, Any, Optional
 from datetime import datetime, timedelta
 
 import pandas as pd
@@ -72,8 +72,8 @@ def get_stock_price_data(symbol: str, days: int = 60) -> str:
     closes = [float(recent.iloc[i].get("close", recent.iloc[i].get("收盘", 0)))
               for i in range(len(recent))]
     ma5 = sum(closes[-5:]) / min(5, len(closes[-5:])) if closes else 0
-    ma10 = sum(closes[-10:]) / min(10, len(closes[-10:])) if len(closes) >= 10 else closes[-1]
-    ma20 = sum(closes[-20:]) / min(20, len(closes[-20:])) if len(closes) >= 20 else closes[-1]
+    ma10 = sum(closes[-10:]) / min(10, len(closes[-10:])) if closes else 0
+    ma20 = sum(closes[-20:]) / min(20, len(closes[-20:])) if closes else 0
 
     high = max(closes[-20:]) if len(closes) >= 20 else max(closes)
     low = min(closes[-20:]) if len(closes) >= 20 else min(closes)
@@ -502,8 +502,9 @@ def check_liquidity_risk(symbol: str, stock_name: str = "") -> str:
 
     # 1. ST 检查 — 通过股票名称中的 *ST/ST 标记检测（比代码前缀更可靠）
     name_lower = stock_name.lower() if stock_name else ""
-    st_match = bool(re.search(r'\*?ST', quote_data)) or bool(re.search(r'\*?ST', price_data))
-    if st_match or 'st' in name_lower or '*st' in name_lower:
+    # 使用词边界避免误匹配 "BEST"/"POST" 等含 ST 子串的单词；中文名用 startswith 更精确
+    st_match = bool(re.search(r'(\*ST|\bST\b)', quote_data)) or bool(re.search(r'(\*ST|\bST\b)', price_data))
+    if st_match or name_lower.startswith('*st') or name_lower.startswith('st '):
         lines.append("### 1. ST/退市风险")
         lines.append("> 🔴 **该股为 ST 股票，涨跌停仅 5%，流动性极差，一日游策略严禁参与！**")
         lines.append("> 建议: **强制回避**")
@@ -618,7 +619,12 @@ def get_global_macro_data() -> str:
         from dataflows.market_cache import MarketDataCache
         cache = MarketDataCache.get_instance()
         trade_date = cache.get_trade_date()
-    except Exception:
+    except Exception as e:
+        logger.debug(f"获取 trade_date 失败: {e}")
+        trade_date = ""
+
+    # trade_date 为空时回退到当前自然日期
+    if not trade_date:
         trade_date = datetime.now().strftime("%Y-%m-%d")
 
     cache_key = f"global_macro_{trade_date}"
@@ -626,8 +632,8 @@ def get_global_macro_data() -> str:
         cached = cache.get_public_data(cache_key)
         if cached:
             return cached
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"读取 global_macro 缓存失败: {e}")
 
     # ============================================================
     # 1. 美股三大指数 (新浪接口)
@@ -758,8 +764,3 @@ def get_global_macro_data() -> str:
         pass
 
     return result
-
-
-GLOBAL_MACRO_TOOLS = [
-    get_global_macro_data,
-]

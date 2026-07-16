@@ -85,10 +85,14 @@ class ConditionalLogic:
                     last_ai = m.content if hasattr(m, "content") else ""
                     break
 
-            if last_ai and str(last_ai).startswith("Bull:"):
-                return "bear_researcher"
-
-        return "bull_researcher"
+            if last_ai:
+                last_str = str(last_ai)
+                if last_str.startswith("Bull:"):
+                    return "bear_researcher"
+                elif last_str.startswith("Bear:"):
+                    return "bull_researcher"
+                # 其他情况默认到 bull_researcher（安全回退）
+            return "bull_researcher"
 
     # ============================================================
     # 风险辩论路由
@@ -115,9 +119,9 @@ class ConditionalLogic:
                     last_content = str(m.content) if hasattr(m, "content") else ""
                     break
 
-        if "Conservative:" in last_content:
+        if last_content.startswith("Conservative:"):
             return "neutral_risk"
-        elif "Neutral:" in last_content:
+        elif last_content.startswith("Neutral:"):
             return "aggressive_risk"
         else:
             # Aggressive 发言后 → 轮到 Conservative

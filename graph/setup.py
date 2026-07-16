@@ -281,7 +281,8 @@ class GraphSetup:
         # 板块轮动分析师 — EvoSkill round 2 发现，综合资金流+板块排行评估行业信号
         def sector_rotation_analyst_node(state: AgentState) -> dict:
             cfg = create_sector_rotation_analyst(deep, self.config)
-            context = self._build_debate_context(state)
+            # include_macro_data=False: 该节点会自行注入完整 data_context，避免重复
+            context = self._build_debate_context(state, include_macro_data=False)
             sector_ctx = state.get("sector_context", "")
             if sector_ctx:
                 context = "## 当前板块\n{}\n\n".format(sector_ctx) + context
@@ -289,9 +290,9 @@ class GraphSetup:
             data_context = state.get("data_context", "")
             if data_context:
                 context += "\n\n## 板块资金流与市场数据\n{}".format(data_context)
-                context += "\n\n请基于以上资金流数据分析5个持仓板块的强弱，输出以 'Sector: ' 开头的结构化分析。"
+                context += "\n\n请基于以上已注入的资金流数据分析5个持仓板块的强弱，输出以 'Sector: ' 开头的结构化分析。"
             else:
-                context += "\n\n请使用 get_sector_fund_flow_data() 获取板块资金流，评估5个持仓板块的强弱，输出以 'Sector: ' 开头的结构化分析。"
+                context += "\n\n注意：未获取到板块资金流数据，请明确说明数据缺失，并基于上下文中其他信息进行有限分析，输出以 'Sector: ' 开头的结构化分析。"
 
             messages = [SystemMessage(content=cfg["system_prompt"]),
                        HumanMessage(content=context)]
@@ -306,7 +307,8 @@ class GraphSetup:
         # 全球宏观分析师 — EvoSkill v0.4，监控美股/港股/A50/VIX/汇率/商品
         def global_macro_analyst_node(state: AgentState) -> dict:
             cfg = create_global_macro_analyst(deep, self.config)
-            context = self._build_debate_context(state)
+            # include_macro_data=False: 该节点会自行注入完整 data_context，避免重复
+            context = self._build_debate_context(state, include_macro_data=False)
             data_context = state.get("data_context", "")
             if data_context:
                 context += "\n\n## 全球市场数据\n{}".format(data_context)
@@ -320,7 +322,7 @@ class GraphSetup:
             if summary_parts:
                 context += "\n\n## 前序分析摘要\n" + "\n".join(summary_parts[-5:])
 
-            context += "\n\n请调用 get_global_macro_data() 获取全球市场数据，输出以 'Global: ' 开头的隔夜环境评估。"
+            context += "\n\n基于上方已注入的全球市场数据与前序分析摘要，输出以 'Global: ' 开头的隔夜环境评估（Bullish/Bearish/Neutral 必须明确标注）。"
             messages = [SystemMessage(content=cfg["system_prompt"]),
                        HumanMessage(content=context)]
             response = deep.invoke(messages)
@@ -339,6 +341,20 @@ class GraphSetup:
             context = self._build_manager_context(state)
             messages = [SystemMessage(content=cfg["system_prompt"]),
                        HumanMessage(content=context)]
+
+            # 绑定结构化输出 schema，保证下游 Trader 能稳定读取研究计划
+            schema_cls = cfg.get("structured_output")
+            if schema_cls:
+                try:
+                    llm_structured = deep.with_structured_output(schema_cls)
+                    plan_obj = llm_structured.invoke(messages)
+                    from agents.schemas import render_research_plan
+                    plan_text = render_research_plan(plan_obj)
+                    return {"messages": [AIMessage(content=plan_text)]}
+                except Exception as e:
+                    logger.warning(f"RM 结构化输出失败，回退到自由文本: {e}")
+
+            # 回退：自由文本
             response = deep.invoke(messages)
             return {"messages": [response]}
         workflow.add_node("research_manager", research_manager_node)
@@ -353,6 +369,20 @@ class GraphSetup:
             context = self._build_trader_context(state)
             messages = [SystemMessage(content=cfg["system_prompt"]),
                        HumanMessage(content=context)]
+
+            # 绑定结构化输出 schema，保证下游风险分析师能稳定读取交易提案
+            schema_cls = cfg.get("structured_output")
+            if schema_cls:
+                try:
+                    llm_structured = quick.with_structured_output(schema_cls)
+                    proposal = llm_structured.invoke(messages)
+                    from agents.schemas import render_trader_proposal
+                    proposal_text = render_trader_proposal(proposal)
+                    return {"messages": [AIMessage(content=proposal_text)]}
+                except Exception as e:
+                    logger.warning(f"Trader 结构化输出失败，回退到自由文本: {e}")
+
+            # 回退：自由文本
             response = quick.invoke(messages)
             return {"messages": [response]}
         workflow.add_node("trader", trader_node)
@@ -486,8 +516,14 @@ class GraphSetup:
     # 上下文构建辅助方法
     # ============================================================
 
-    def _build_debate_context(self, state: dict) -> str:
-        """为研究员辩论构建上下文"""
+    def _build_debate_context(self, state: dict, include_macro_data: bool = True) -> str:
+        """为研究员辩论构建上下文
+
+        Args:
+            include_macro_data: 是否注入 data_context 摘要。Bull/Bear/Reversal
+                传 True（需要隔夜环境背景）；Sector/GlobalMacro 传 False，因为
+                它们会自行注入完整 data_context，避免重复。
+        """
         parts = [f"## 分析标的: {state.get('stock_name', '')} ({state['symbol']})",
                  f"分析日期: {state['trade_date']}\n"]
 
@@ -496,13 +532,16 @@ class GraphSetup:
             parts.append(f"### 大盘背景\n{overview[:800]}\n")
 
         # 注入宏观市场数据，让Bull/Bear在辩论中知道隔夜外盘环境
-        data_context = state.get("data_context", "")
-        if data_context:
-            parts.append(f"### 🌍 全球市场数据 (隔夜环境)\n{data_context[:600]}\n")
+        if include_macro_data:
+            data_context = state.get("data_context", "")
+            if data_context:
+                parts.append(f"### 🌍 全球市场数据 (隔夜环境)\n{data_context[:600]}\n")
 
         direction = state.get("market_direction", "")
         if direction:
-            parts.append(f"### ⚠️ 市场方向闸门\n{direction}\n")
+            parts.append(f"### ⚠️ 市场方向闸门 (必须遵守)\n{direction}\n")
+        else:
+            parts.append(f"### ⚠️ 市场方向闸门 (默认)\nNEUTRAL — 未检测到明确市场方向信号，按默认规则正常判断，不要全Hold\n")
 
         reports = {
             "基本面分析": state.get("fundamental_report", ""),
@@ -581,11 +620,18 @@ class GraphSetup:
             f"交易日期: {state['trade_date']}\n",
             "请基于以下研究报告制定交易方案。\n",
         ]
+        # 读取 RM 输出（结构化渲染后含 **Investment Thesis** / **Rating**），
+        # 同时兼容自由文本含 "Research Plan"/"研究计划" 的情况
+        rm_keywords = ["**Investment Thesis**", "**Rating**:", "Research Plan", "研究计划", "Investment Thesis"]
+        rm_found = False
         for m in state.get("messages", []):
             c = str(m.content) if hasattr(m, "content") else ""
-            if "Research Plan" in c or "研究计划" in c or "Investment Thesis" in c:
+            if any(k in c for k in rm_keywords):
                 parts.append(c)
+                rm_found = True
                 break
+        if not rm_found:
+            parts.append("(研究主管未产生研究计划，请基于宏观与市场数据谨慎决策)\n")
 
         # 注入全球宏观摘要
         macro = state.get("global_macro_report", "")
@@ -606,19 +652,39 @@ class GraphSetup:
         for rpt in ["fundamental_report", "sentiment_report", "policy_report", "technical_report"]:
             content = state.get(rpt, "")
             if content:
-                parts.append(f"\n{content[:500]}\n")
+                # 截断在段落边界，避免切断 Strengths/Risks 列表
+                truncated = content[:800]
+                last_para = truncated.rfind("\n\n")
+                if last_para > 400:
+                    truncated = truncated[:last_para]
+                parts.append(f"\n{truncated}\n")
 
         # 注入全球宏观报告，让风险分析师知道VIX/A50/汇率
         macro = state.get("global_macro_report", "")
         if macro:
             parts.append(f"\n### 全球宏观环境\n{macro[:400]}\n")
 
-        # 交易员提案
+        # 交易员提案（结构化渲染后含 **Action**: / **Position**:）
+        trader_keywords = ["**Action**:", "**Position**:", "Action:", "Position:"]
+        trader_found = False
         for m in state.get("messages", []):
             c = str(m.content) if hasattr(m, "content") else ""
-            if "Action:" in c or "Position:" in c:
+            if any(k in c for k in trader_keywords):
                 parts.append(f"\n### 交易提案\n{c}")
+                trader_found = True
                 break
+        if not trader_found:
+            parts.append("\n### 交易提案\n(交易员未产生明确提案)\n")
+
+        # 同阶段前序风险分析师发言，让辩论真正成为"辩论"而非三连独立评估
+        risk_prefixes = ["Aggressive:", "Conservative:", "Neutral:"]
+        prior_risk = []
+        for m in state.get("messages", []):
+            c = str(m.content) if hasattr(m, "content") else ""
+            if any(c.startswith(p) for p in risk_prefixes):
+                prior_risk.append(c[-500:])
+        if prior_risk:
+            parts.append("\n### 前序风险分析师发言\n" + "\n---\n".join(prior_risk[-3:]))
 
         return "\n".join(parts)
 
@@ -669,6 +735,18 @@ class GraphSetup:
             content = state.get(rpt_key, "")
             if content:
                 parts.append(f"### {rpt_name}\n{content}\n")
+
+        # 交易员提案（结构化渲染后含 **Action**: / **Position**:）
+        trader_keywords = ["**Action**:", "**Position**:", "Action:", "Position:"]
+        trader_found = False
+        for m in state.get("messages", []):
+            c = str(m.content) if hasattr(m, "content") else ""
+            if any(k in c for k in trader_keywords):
+                parts.append(f"### 交易员提案\n{c}\n")
+                trader_found = True
+                break
+        if not trader_found:
+            parts.append("### 交易员提案\n(交易员未产生明确提案，请直接基于分析报告做决策)\n")
 
         # 风险辩论
         parts.append("### 风险辩论\n")

@@ -176,6 +176,7 @@ def get_stock_realtime(symbol: str) -> Optional[Dict[str, Any]]:
                 "price": tx.get("price", 0),
                 "change_pct": tx.get("change_pct", 0),
                 "change": tx.get("change_amt", 0),
+                # NOTE: volume 由 amount/price 反推，为近似值（真实应为 VWAP 除法）
                 "volume": int(tx.get("amount_wan", 0) * 10000 / max(tx.get("price", 1), 0.01)),
                 "amount": tx.get("amount_wan", 0) * 10000,
                 "high": tx.get("high", 0),

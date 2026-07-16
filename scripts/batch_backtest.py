@@ -52,7 +52,8 @@ def get_klines(code):
         # (open, close, high, low)
         return {k[0]:(float(k[1]),float(k[2]),float(k[3]),float(k[4]))
                 for k in (data.get("qfqday") or data.get("day",[]))}
-    except:
+    except Exception as e:
+        print(f"  拉取 {code} K线失败: {e}")
         return {}
 
 
@@ -62,51 +63,56 @@ def load_pred(code, d0):
         return {"rating":d.get("rating","?"),"conf":d.get("confidence",0)}
 
 
-print("=" * 78)
-print("  Batch回测 (T+1 + 止盈1% / 止损-3%)")
-print("=" * 78)
+def main():
+    print("=" * 78)
+    print("  Batch回测 (T+1 + 止盈1% / 止损-3%)")
+    print("=" * 78)
 
-all_results = {}
-for label, d0, d1, d2 in DATE_GROUPS:
-    hit=avoid=step=flat=stop=0
-    for code,name,sector in STOCKS:
-        pred=load_pred(code,d0)
-        k=get_klines(code)
-        if not pred or d0 not in k or d1 not in k or d2 not in k: continue
-        is_bull=pred["rating"].lower() in ("buy","overweight")
-        d1o=k[d1][0]; d2h=k[d2][2]; d2l=k[d2][3]; d2c=k[d2][1]; d0c=k[d0][1]
-        hit_p=d1o*1.01; stop_p=d1o*0.97
-        step_trig=(d2h/d0c-1)*100>=1.0
+    all_results = {}
+    for label, d0, d1, d2 in DATE_GROUPS:
+        hit=avoid=step=flat=stop=0
+        for code,name,sector in STOCKS:
+            pred=load_pred(code,d0)
+            k=get_klines(code)
+            if not pred or d0 not in k or d1 not in k or d2 not in k: continue
+            is_bull=pred["rating"].lower() in ("buy","overweight")
+            d1o=k[d1][0]; d2h=k[d2][2]; d2l=k[d2][3]; d2c=k[d2][1]; d0c=k[d0][1]
+            hit_p=d1o*1.01; stop_p=d1o*0.97
+            step_trig=(d2h/d0c-1)*100>=1.0
 
-        if is_bull and d2h>=hit_p:     hit+=1
-        elif is_bull and d2l<=stop_p:  stop+=1
-        elif is_bull:                   flat+=1
-        elif step_trig:                 step+=1
-        else:                           avoid+=1
+            if is_bull and d2h>=hit_p:     hit+=1
+            elif is_bull and d2l<=stop_p:  stop+=1
+            elif is_bull:                   flat+=1
+            elif step_trig:                 step+=1
+            else:                           avoid+=1
 
-    valid=hit+avoid+flat+stop+step
-    bull=hit+stop+flat
-    pnl=hit*0.01 + stop*(-0.03)
-    # can't compute flat pnl in batch easily, skip for summary
-    all_results[label]={"N":valid,"HIT":hit,"STOP":stop,"FLAT":flat,
-        "AVOID":avoid,"STEP":step,"BULL":bull}
-    print(f"  {label}: 有效{valid} HIT={hit} STOP={stop} FLAT={flat} AVOID={avoid} STEP={step} | 看多{bull}只")
+        valid=hit+avoid+flat+stop+step
+        bull=hit+stop+flat
+        pnl=hit*0.01 + stop*(-0.03)
+        # can't compute flat pnl in batch easily, skip for summary
+        all_results[label]={"N":valid,"HIT":hit,"STOP":stop,"FLAT":flat,
+            "AVOID":avoid,"STEP":step,"BULL":bull}
+        print(f"  {label}: 有效{valid} HIT={hit} STOP={stop} FLAT={flat} AVOID={avoid} STEP={step} | 看多{bull}只")
 
-print(f"\n{'='*78}")
-print(f"  五 天  汇  总")
-print(f"{'='*78}")
-print(f"  {'日期':<8} {'样本':<4} {'HIT':<4} {'STOP':<5} {'FLAT':<5} {'AVOID':<5} {'STEP':<4} {'看多':<4}")
-print(f"  {'─'*8} {'─'*4} {'─'*4} {'─'*5} {'─'*5} {'─'*5} {'─'*4} {'─'*4}")
-for label in [g[0] for g in DATE_GROUPS]:
-    r=all_results[label]
-    print(f"  {label:<8} {r['N']:<4} {r['HIT']:<4} {r['STOP']:<5} {r['FLAT']:<5} {r['AVOID']:<5} {r['STEP']:<4} {r['BULL']:<4}")
-tN=sum(r["N"] for r in all_results.values())
-tH=sum(r["HIT"] for r in all_results.values())
-tS=sum(r["STOP"] for r in all_results.values())
-tF=sum(r["FLAT"] for r in all_results.values())
-tA=sum(r["AVOID"] for r in all_results.values())
-tSt=sum(r["STEP"] for r in all_results.values())
-tB=sum(r["BULL"] for r in all_results.values())
-print(f"  {'─'*8} {'─'*4} {'─'*4} {'─'*5} {'─'*5} {'─'*5} {'─'*4} {'─'*4}")
-print(f"  {'合计':<8} {tN:<4} {tH:<4} {tS:<5} {tF:<5} {tA:<5} {tSt:<4} {tB:<4}")
-print()
+    print(f"\n{'='*78}")
+    print(f"  五 天  汇  总")
+    print(f"{'='*78}")
+    print(f"  {'日期':<8} {'样本':<4} {'HIT':<4} {'STOP':<5} {'FLAT':<5} {'AVOID':<5} {'STEP':<4} {'看多':<4}")
+    print(f"  {'─'*8} {'─'*4} {'─'*4} {'─'*5} {'─'*5} {'─'*5} {'─'*4} {'─'*4}")
+    for label in [g[0] for g in DATE_GROUPS]:
+        r=all_results[label]
+        print(f"  {label:<8} {r['N']:<4} {r['HIT']:<4} {r['STOP']:<5} {r['FLAT']:<5} {r['AVOID']:<5} {r['STEP']:<4} {r['BULL']:<4}")
+    tN=sum(r["N"] for r in all_results.values())
+    tH=sum(r["HIT"] for r in all_results.values())
+    tS=sum(r["STOP"] for r in all_results.values())
+    tF=sum(r["FLAT"] for r in all_results.values())
+    tA=sum(r["AVOID"] for r in all_results.values())
+    tSt=sum(r["STEP"] for r in all_results.values())
+    tB=sum(r["BULL"] for r in all_results.values())
+    print(f"  {'─'*8} {'─'*4} {'─'*4} {'─'*5} {'─'*5} {'─'*5} {'─'*4} {'─'*4}")
+    print(f"  {'合计':<8} {tN:<4} {tH:<4} {tS:<5} {tF:<5} {tA:<5} {tSt:<4} {tB:<4}")
+    print()
+
+
+if __name__ == "__main__":
+    main()

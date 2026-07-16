@@ -105,23 +105,33 @@ def collect(date_list: List[str]) -> dict:
             except Exception:
                 continue
 
-            d0 = None
-            d1_close = None
-            d1_open = None
+            # 策略：Day0(决策日)收盘分析 → Day1 开盘买入 → Day2 收盘卖出
+            # 需要找到 Day1 开盘价（买入价）和 Day2 收盘价（卖出价）
+            d1_open = None  # Day1 开盘价 = 买入价
+            d2_close = None  # Day2 收盘价 = 卖出价
+            next_day_count = 0
             for k in klines:
                 if k[0] == trade_date:
-                    d0 = float(k[2])
-                if k[0] > trade_date and d1_close is None:
-                    d1_open = float(k[1])
-                    d1_close = float(k[2])
-                    break
+                    # Day0 (决策日)，跳过
+                    continue
+                if k[0] > trade_date:
+                    next_day_count += 1
+                    if next_day_count == 1:
+                        # Day1: 取开盘价作为买入价
+                        d1_open = float(k[1])
+                    elif next_day_count == 2:
+                        # Day2: 取收盘价作为卖出价
+                        d2_close = float(k[2])
+                        break
 
-            if d0 is None or d1_close is None:
+            if d1_open is None or d2_close is None:
+                # 数据不足（可能是决策日就是最后一个交易日），跳过
                 continue
 
-            close_pct = (d1_close / d0 - 1) * 100
+            # 实际收益率 = (Day2收盘价 - Day1开盘价) / Day1开盘价
+            actual_return_pct = (d2_close / d1_open - 1) * 100
             should_buy = pred["rating"] in ("Buy", "Overweight")
-            actually_up = close_pct >= 1.0
+            actually_up = actual_return_pct >= 1.0
 
             if should_buy and actually_up:
                 verdict = "HIT"
@@ -142,7 +152,7 @@ def collect(date_list: List[str]) -> dict:
                 "sector": sector,
                 "rating": pred["rating"],
                 "confidence": pred["confidence"],
-                "actual_chg": round(close_pct, 2),
+                "actual_chg": round(actual_return_pct, 2),
                 "verdict": verdict,
                 "summary": pred["summary"],
             }

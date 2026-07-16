@@ -495,6 +495,15 @@ class GraphSetup:
         if overview:
             parts.append(f"### 大盘背景\n{overview[:800]}\n")
 
+        # 注入宏观市场数据，让Bull/Bear在辩论中知道隔夜外盘环境
+        data_context = state.get("data_context", "")
+        if data_context:
+            parts.append(f"### 🌍 全球市场数据 (隔夜环境)\n{data_context[:600]}\n")
+
+        direction = state.get("market_direction", "")
+        if direction:
+            parts.append(f"### ⚠️ 市场方向闸门\n{direction}\n")
+
         reports = {
             "基本面分析": state.get("fundamental_report", ""),
             "技术面分析": state.get("technical_report", ""),
@@ -577,6 +586,12 @@ class GraphSetup:
             if "Research Plan" in c or "研究计划" in c or "Investment Thesis" in c:
                 parts.append(c)
                 break
+
+        # 注入全球宏观摘要
+        macro = state.get("global_macro_report", "")
+        if macro:
+            parts.append(f"\n### 全球宏观参考\n{macro[:300]}\n")
+
         return "\n".join(parts)
 
     def _build_risk_context(self, state: dict) -> str:
@@ -588,10 +603,15 @@ class GraphSetup:
             "请基于交易提案和前期分析，进行风险评估。\n",
         ]
 
-        for rpt in ["fundamental_report", "sentiment_report", "policy_report"]:
+        for rpt in ["fundamental_report", "sentiment_report", "policy_report", "technical_report"]:
             content = state.get(rpt, "")
             if content:
                 parts.append(f"\n{content[:500]}\n")
+
+        # 注入全球宏观报告，让风险分析师知道VIX/A50/汇率
+        macro = state.get("global_macro_report", "")
+        if macro:
+            parts.append(f"\n### 全球宏观环境\n{macro[:400]}\n")
 
         # 交易员提案
         for m in state.get("messages", []):
@@ -617,6 +637,8 @@ class GraphSetup:
         direction = state.get("market_direction", "")
         if direction:
             parts.append(f"### ⚠️ 市场方向闸门 (必须遵守)\n{direction}\n")
+        else:
+            parts.append(f"### ⚠️ 市场方向闸门 (默认)\nNEUTRAL — 未检测到明确市场方向信号，按默认规则正常判断，不要全Hold\n")
 
         sector_momentum = state.get("sector_momentum", "")
         if sector_momentum:

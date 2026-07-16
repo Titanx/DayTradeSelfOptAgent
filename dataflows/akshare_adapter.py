@@ -157,7 +157,7 @@ def get_stock_daily(symbol: str, start_date: str = None, end_date: str = None,
 @_safe_akshare_call
 def get_stock_realtime(symbol: str) -> Optional[Dict[str, Any]]:
     """
-    获取A股实时行情快照（多源回退）
+    获取A股实时行情快照（多源回退 — 优先单股接口，避免拉取全市场5000+股票）
 
     Args:
         symbol: 股票代码
@@ -165,13 +165,37 @@ def get_stock_realtime(symbol: str) -> Optional[Dict[str, Any]]:
     Returns:
         dict with: name, price, change_pct, volume, high, low, open, pre_close
     """
+    # 0. 优先用腾讯/新浪单股HTTP接口（轻量级，不拉全市场）
+    try:
+        from .direct_http import tencent_realtime
+        tx = tencent_realtime(symbol)
+        if tx and tx.get("price", 0) > 0:
+            return {
+                "symbol": symbol,
+                "name": tx.get("name", ""),
+                "price": tx.get("price", 0),
+                "change_pct": tx.get("change_pct", 0),
+                "change": tx.get("change_amt", 0),
+                "volume": int(tx.get("amount_wan", 0) * 10000 / max(tx.get("price", 1), 0.01)),
+                "amount": tx.get("amount_wan", 0) * 10000,
+                "high": tx.get("high", 0),
+                "low": tx.get("low", 0),
+                "open": tx.get("open", 0),
+                "pre_close": tx.get("last_close", 0),
+                "turnover_rate": tx.get("turnover_pct", None),
+                "pe": tx.get("pe_ttm", None),
+                "total_mv": tx.get("mcap_yi", 0) * 1e8 if tx.get("mcap_yi") else None,
+            }
+    except Exception:
+        pass
+
     try:
         import akshare as ak
     except ImportError:
         ak = None
 
     if ak is not None:
-        # 1. 尝试东方财富源
+        # 1. 尝试东方财富源（全市场快照，作为回退）
         try:
             df = ak.stock_zh_a_spot_em()
             if df is not None and not df.empty:

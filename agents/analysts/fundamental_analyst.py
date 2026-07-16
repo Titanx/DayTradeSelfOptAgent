@@ -45,14 +45,15 @@ def create_fundamental_analyst(llm, config: dict) -> dict:
     创建基本面分析师 Agent 配置
 
     Returns:
-        {"prompt": str, "tools": list, "structured_output": type}
+        {"name": str, "system_prompt": str, "tools": list, "structured_output": type}
     """
     from agents.utils.agent_utils import FUNDAMENTAL_TOOLS
     from agents.schemas import FundamentalReport
+    from agents.skill_loader import get_system_prompt
 
     return {
         "name": "基本面分析师",
-        "system_prompt": SYSTEM_PROMPT,
+        "system_prompt": get_system_prompt("fundamental_analyst"),
         "tools": FUNDAMENTAL_TOOLS,
         "structured_output": FundamentalReport,
     }

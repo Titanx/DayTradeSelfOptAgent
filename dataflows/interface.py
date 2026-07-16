@@ -14,6 +14,9 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+_ROUTE_CONFIG: Optional[dict] = None
+
+
 # ============================================================
 # 数据分类
 # ============================================================
@@ -93,7 +96,7 @@ def route_to_vendor(method: str, *args, config: dict = None, **kwargs) -> Any:
 
     Args:
         method: 工具方法名
-        config: 配置字典（可选，用于读取 data_vendor）
+        config: 配置字典（可选，首次未传入时惰性加载并缓存到模块级变量）
         *args, **kwargs: 传递给底层方法
 
     Returns:
@@ -108,8 +111,12 @@ def route_to_vendor(method: str, *args, config: dict = None, **kwargs) -> Any:
             return cached
 
     if config is None:
-        from config.default_config import get_config
-        config = get_config()
+        # 惰性加载 config 并缓存到模块级（避免每次调用都 deepcopy）
+        global _ROUTE_CONFIG
+        if _ROUTE_CONFIG is None:
+            from config.default_config import get_config
+            _ROUTE_CONFIG = get_config()
+        config = _ROUTE_CONFIG
 
     vendors = get_vendors_for_method(method, config)
 

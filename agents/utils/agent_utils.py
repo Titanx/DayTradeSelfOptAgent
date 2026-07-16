@@ -288,27 +288,11 @@ def get_sector_data() -> str:
     return "\n\n".join(parts)
 
 
-_SECTOR_FUND_FLOW_CACHE = {}
-_SECTOR_FUND_FLOW_CACHE_FILE = None
-
-
-def _get_sector_fund_flow_cache_path():
-    global _SECTOR_FUND_FLOW_CACHE_FILE
-    if _SECTOR_FUND_FLOW_CACHE_FILE is not None:
-        return _SECTOR_FUND_FLOW_CACHE_FILE
-    from pathlib import Path as _Path
-    project = _Path(__file__).parent.parent.parent
-    cache_dir = project / "data" / "overview_cache"
-    cache_dir.mkdir(parents=True, exist_ok=True)
-    _SECTOR_FUND_FLOW_CACHE_FILE = cache_dir / "sector_fund_flow_cache.json"
-    return _SECTOR_FUND_FLOW_CACHE_FILE
-
-
 def get_sector_fund_flow_data(days: int = 3) -> str:
     """获取板块资金流排名 (今日/5日/10日)。
 
     用于识别主力资金在板块间的流向，辅助判断板块强弱。
-    同一日内缓存复用，内存+磁盘双层 (每日数据不变)。
+    缓存放 MarketDataCache (内存+磁盘双层)。
 
     Args:
         days: 拉取天数 (3=今日/5日/10日三个维度)
@@ -317,20 +301,16 @@ def get_sector_fund_flow_data(days: int = 3) -> str:
         Markdown 格式的板块资金流报告
     """
     from datetime import date
-    cache_key = str(date.today())
-    if cache_key in _SECTOR_FUND_FLOW_CACHE:
-        return _SECTOR_FUND_FLOW_CACHE[cache_key]
+    cache_key = f"sector_fund_flow_{date.today()}"
 
-    cache_path = _get_sector_fund_flow_cache_path()
-    if cache_path.exists():
-        try:
-            import json as _json
-            saved = _json.loads(cache_path.read_text(encoding="utf-8"))
-            if saved.get("date") == cache_key and saved.get("data"):
-                _SECTOR_FUND_FLOW_CACHE[cache_key] = saved["data"]
-                return saved["data"]
-        except Exception:
-            pass
+    try:
+        from dataflows.market_cache import MarketDataCache
+        cache = MarketDataCache.get_instance()
+        cached = cache.get_public_data(cache_key)
+        if cached:
+            return cached
+    except Exception:
+        pass
 
     from dataflows.interface import route_to_vendor
     data = route_to_vendor("get_sector_fund_flow", config={}, days=days)
@@ -382,11 +362,10 @@ def get_sector_fund_flow_data(days: int = 3) -> str:
         lines.append("(未匹配到持仓板块)\n")
 
     result = "\n".join(lines)
-    _SECTOR_FUND_FLOW_CACHE[cache_key] = result
     try:
-        import json as _json
-        cache_path = _get_sector_fund_flow_cache_path()
-        _json.dump({"date": cache_key, "data": result}, cache_path.open("w", encoding="utf-8"), ensure_ascii=False)
+        from dataflows.market_cache import MarketDataCache
+        cache = MarketDataCache.get_instance()
+        cache.store_public_data(cache_key, result)
     except Exception:
         pass
     return result
@@ -521,11 +500,10 @@ def check_liquidity_risk(symbol: str, stock_name: str = "") -> str:
 
     import re
 
-    # 1. ST 检查
-    is_st = symbol.startswith("600") is False and symbol.startswith("000") is False and symbol.startswith("002") is False
+    # 1. ST 检查 — 通过股票名称中的 *ST/ST 标记检测（比代码前缀更可靠）
     name_lower = stock_name.lower() if stock_name else ""
-    st_match = bool(re.search(r'[*]?ST', quote_data)) or bool(re.search(r'[*]?ST', price_data))
-    if st_match or 'st' in name_lower:
+    st_match = bool(re.search(r'\*?ST', quote_data)) or bool(re.search(r'\*?ST', price_data))
+    if st_match or 'st' in name_lower or '*st' in name_lower:
         lines.append("### 1. ST/退市风险")
         lines.append("> 🔴 **该股为 ST 股票，涨跌停仅 5%，流动性极差，一日游策略严禁参与！**")
         lines.append("> 建议: **强制回避**")

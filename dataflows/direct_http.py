@@ -10,10 +10,23 @@ HTTP直连数据源（不回封IP的备用通道）
 """
 
 import urllib.request
+import time
+import random
 from typing import Optional, Dict
 
 
 _UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+
+
+def _http_retry(func, max_retries: int = 2):
+    """HTTP请求重试装饰器（指数退避）"""
+    for attempt in range(max_retries + 1):
+        try:
+            return func()
+        except Exception:
+            if attempt < max_retries:
+                time.sleep(0.5 * (2 ** attempt) + random.uniform(0.1, 0.3))
+    return None
 
 
 def tencent_realtime(symbol: str) -> Optional[Dict]:
@@ -30,12 +43,14 @@ def tencent_realtime(symbol: str) -> Optional[Dict]:
     prefix = "sh" if symbol.startswith(("6", "9")) else ("bj" if symbol.startswith("8") else "sz")
     url = f"https://qt.gtimg.cn/q={prefix}{symbol}"
 
-    req = urllib.request.Request(url)
-    req.add_header("User-Agent", _UA)
-    try:
+    def _fetch():
+        req = urllib.request.Request(url)
+        req.add_header("User-Agent", _UA)
         resp = urllib.request.urlopen(req, timeout=10)
-        data = resp.read().decode("gbk")
-    except Exception:
+        return resp.read().decode("gbk")
+
+    data = _http_retry(_fetch)
+    if data is None:
         return None
 
     for line in data.strip().split(";"):

@@ -44,10 +44,11 @@ def create_technical_analyst(llm, config: dict) -> dict:
     """创建技术面分析师"""
     from agents.utils.agent_utils import MARKET_TOOLS
     from agents.schemas import TechnicalReport
+    from agents.skill_loader import get_system_prompt
 
     return {
         "name": "技术面分析师",
-        "system_prompt": SYSTEM_PROMPT,
+        "system_prompt": get_system_prompt("technical_analyst"),
         "tools": MARKET_TOOLS,
         "structured_output": TechnicalReport,
     }

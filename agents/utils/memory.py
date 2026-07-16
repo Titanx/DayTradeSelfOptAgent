@@ -37,7 +37,7 @@ class TradingMemoryLog:
             decision_text: 决策内容
         """
         # 提取评级
-        rating_match = re.search(r'\*\*Rating\*\*:\s*(\w+)', decision_text)
+        rating_match = re.search(r'\*\*Rating\*\*:\s*([\w\s]+?)(?:\s*\n|\s*$)', decision_text)
         rating = rating_match.group(1) if rating_match else "Unknown"
 
         entry = (

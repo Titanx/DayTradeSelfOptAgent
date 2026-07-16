@@ -53,10 +53,11 @@ def create_sentiment_analyst(llm, config: dict) -> dict:
     """创建舆论情绪分析师"""
     from agents.utils.agent_utils import SENTIMENT_TOOLS
     from agents.schemas import SentimentReport
+    from agents.skill_loader import get_system_prompt
 
     return {
         "name": "舆论情绪分析师",
-        "system_prompt": SYSTEM_PROMPT,
+        "system_prompt": get_system_prompt("sentiment_analyst"),
         "tools": SENTIMENT_TOOLS,
         "structured_output": SentimentReport,
     }

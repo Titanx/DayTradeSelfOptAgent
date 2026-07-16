@@ -20,19 +20,26 @@ from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
-# 尝试导入 Agent-Reach 的雪球 Channel
-try:
-    _agent_reach_path = Path(__file__).parent.parent.parent / "Agent-Reach"
-    if str(_agent_reach_path) not in sys.path:
-        sys.path.insert(0, str(_agent_reach_path))
+# 懒加载 XueqiuChannel — 不在模块导入时实例化
+_XUEQIU_CHANNEL = None
+_XUEQIU_CHECKED = False
 
-    from agent_reach.channels.xueqiu import XueqiuChannel
-    _XUEQIU_AVAILABLE = True
-    _xueqiu = XueqiuChannel()
-except Exception as e:
-    logger.warning(f"Agent-Reach 雪球Channel 导入失败: {e}，将使用HTTP回退")
-    _XUEQIU_AVAILABLE = False
-    _xueqiu = None
+
+def _get_xueqiu_channel():
+    """懒加载雪球Channel（支持运行时恢复）"""
+    global _XUEQIU_CHANNEL, _XUEQIU_CHECKED
+    if _XUEQIU_CHECKED:
+        return _XUEQIU_CHANNEL
+    _XUEQIU_CHECKED = True
+    try:
+        _agent_reach_path = Path(__file__).parent.parent.parent / "Agent-Reach"
+        if str(_agent_reach_path) not in sys.path:
+            sys.path.insert(0, str(_agent_reach_path))
+        from agent_reach.channels.xueqiu import XueqiuChannel
+        _XUEQIU_CHANNEL = XueqiuChannel()
+    except Exception as e:
+        logger.warning(f"Agent-Reach 雪球Channel 导入失败: {e}，将使用HTTP回退")
+    return _XUEQIU_CHANNEL
 
 
 # ============================================================
@@ -49,9 +56,10 @@ def get_xueqiu_quote(symbol: str) -> Optional[Dict[str, Any]]:
     Returns:
         行情数据字典
     """
-    if _XUEQIU_AVAILABLE and _xueqiu:
+    xq = _get_xueqiu_channel()
+    if xq:
         try:
-            return _xueqiu.get_stock_quote(symbol)
+            return xq.get_stock_quote(symbol)
         except Exception as e:
             logger.warning(f"雪球行情获取失败 [{symbol}]: {e}")
 
@@ -94,9 +102,10 @@ def get_xueqiu_hot_posts(symbol: str = None, limit: int = 20) -> List[Dict[str, 
     Returns:
         帖子列表，每个包含: title, text, author, likes, url, created_at
     """
-    if _XUEQIU_AVAILABLE and _xueqiu:
+    xq = _get_xueqiu_channel()
+    if xq:
         try:
-            posts = _xueqiu.get_hot_posts(limit=limit)
+            posts = xq.get_hot_posts(limit=limit)
             if posts:
                 if symbol:
                     code = symbol[2:] if len(symbol) > 2 else symbol
@@ -142,9 +151,10 @@ def get_xueqiu_hot_stocks(limit: int = 20) -> List[Dict[str, Any]]:
     Returns:
         热门股票列表
     """
-    if _XUEQIU_AVAILABLE and _xueqiu:
+    xq = _get_xueqiu_channel()
+    if xq:
         try:
-            return _xueqiu.get_hot_stocks(limit=limit)
+            return xq.get_hot_stocks(limit=limit)
         except Exception as e:
             logger.warning(f"雪球热门股票获取失败: {e}")
 

@@ -54,10 +54,11 @@ def create_policy_analyst(llm, config: dict) -> dict:
     """创建政策/宏观分析师"""
     from agents.utils.agent_utils import POLICY_TOOLS
     from agents.schemas import PolicyReport
+    from agents.skill_loader import get_system_prompt
 
     return {
         "name": "政策/宏观分析师",
-        "system_prompt": SYSTEM_PROMPT,
+        "system_prompt": get_system_prompt("policy_analyst"),
         "tools": POLICY_TOOLS,
         "structured_output": PolicyReport,
     }

@@ -129,6 +129,32 @@ class MarketDataCache:
     def set_trade_date(self, trade_date: str):
         self._trade_date = trade_date
 
+    def get_public_data(self, key: str) -> Optional[Any]:
+        """通用键值缓存（不限 method 语义，任意 key → 内存+磁盘回退）"""
+        if key in self._memory:
+            return self._memory[key]
+        json_path = self.cache_dir / f"{key}.cache.json"
+        if json_path.exists():
+            try:
+                data = json.loads(json_path.read_text(encoding="utf-8"))
+                self._memory[key] = data
+                return data
+            except Exception:
+                pass
+        return None
+
+    def store_public_data(self, key: str, data: Any):
+        """通用键值缓存写入（内存+JSON磁盘）"""
+        self._memory[key] = data
+        json_path = self.cache_dir / f"{key}.cache.json"
+        try:
+            json_path.write_text(
+                json.dumps(_to_jsonable(data), ensure_ascii=False),
+                encoding="utf-8",
+            )
+        except Exception as e:
+            logger.warning(f"公共数据缓存写入失败 {key}: {e}")
+
     def get(self, method: str, date: str = None) -> Optional[Any]:
         """从缓存获取数据（内存 → 磁盘回退）"""
         date = date or self._trade_date

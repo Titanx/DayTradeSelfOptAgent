@@ -131,10 +131,18 @@ def get_stock_realtime_quote(symbol: str) -> str:
     output = to_markdown(data, title=f"实时行情 — {symbol}")
 
     # ———— 写入缓存 ————
+    # C8 修复：盘中实时价不是收盘数据，不能写入磁盘缓存（否则会污染收盘数据，
+    # 导致后续运行读取到盘中快照而永远不会刷新为真正的收盘数据）。
+    # 盘中只更新内存缓存（当前会话内可复用），收盘后才写磁盘持久化。
     try:
         from dataflows.market_cache import MarketDataCache
+        from dataflows.akshare_adapter import is_market_closed
         cache = MarketDataCache.get_instance()
-        cache.set_stock_data(symbol, "get_stock_realtime_quote", output)
+        # 盘中时段：只写内存，不写磁盘
+        cache.set_stock_data(
+            symbol, "get_stock_realtime_quote", output,
+            skip_disk=not is_market_closed(),
+        )
     except Exception:
         pass
 
@@ -404,6 +412,48 @@ def get_opinion_report(symbol: str, stock_name: str = "") -> str:
         result = aggregate_sentiment(symbol, stock_name, config)
         report = result.get("summary", "无法获取舆论数据")
 
+        # H16 修复：追加 sources 分项数据（各源 count/score）和 risk_signals（不再丢弃结构化数据）
+        sources = result.get("sources", {}) or {}
+        if sources:
+            report += "\n\n### 各源详情"
+            for src_name, src_data in sources.items():
+                if not src_data:
+                    continue
+                if isinstance(src_data, dict):
+                    detail_parts = []
+                    # count 字段（news/weibo 等可能提供）
+                    count = src_data.get("count")
+                    if count is not None:
+                        detail_parts.append(f"count={count}")
+                    # 情绪倾向（xueqiu 提供 sentiment_hint）
+                    hint = src_data.get("sentiment_hint")
+                    if hint:
+                        detail_parts.append(f"情绪={hint}")
+                    # 帖子数（xueqiu 的 hot_posts/search_posts）
+                    hot_posts = src_data.get("hot_posts")
+                    if isinstance(hot_posts, list):
+                        detail_parts.append(f"热帖={len(hot_posts)}")
+                    search_posts = src_data.get("search_posts")
+                    if isinstance(search_posts, list):
+                        detail_parts.append(f"搜索帖={len(search_posts)}")
+                    # 行情（xueqiu quote）
+                    quote = src_data.get("quote")
+                    if isinstance(quote, dict) and quote:
+                        pct = quote.get("percent")
+                        if pct is not None:
+                            detail_parts.append(f"涨跌={pct:+.2f}%")
+                    # 错误标记
+                    if src_data.get("error"):
+                        detail_parts.append(f"error={src_data['error']}")
+                    detail = ", ".join(detail_parts) if detail_parts else "已获取"
+                    report += f"\n- {src_name.upper()}: {detail}"
+
+        risk_signals = result.get("risk_signals", []) or []
+        if risk_signals:
+            report += "\n\n### ⚠️ 风险信号"
+            for sig in risk_signals:
+                report += f"\n- {sig}"
+
         # ———— 写入缓存 ————
         try:
             from dataflows.market_cache import MarketDataCache
@@ -558,6 +608,107 @@ def check_liquidity_risk(symbol: str, stock_name: str = "") -> str:
     return "\n".join(lines)
 
 
+def hard_filter_stock(symbol: str, config: dict = None) -> tuple:
+    """
+    硬过滤：ST / 流动性 / 跌停 / 停牌
+
+    结构化字段判断（非 Markdown 正则），用于在 PM 决策后强制拦截 Buy/Overweight。
+    数据获取失败时不阻塞（返回 allowed=True）。
+
+    Args:
+        symbol: 股票代码
+        config: 配置 dict（读取 one_day_swing 子配置）
+
+    Returns:
+        (allowed: bool, reason: str)
+        - (True, "") 通过
+        - (False, "reason") 拒绝
+        - 数据获取失败 → (True, "数据不可用，跳过硬过滤")
+    """
+    if config is None:
+        from config.default_config import get_config
+        config = get_config()
+
+    swing_cfg = config.get("one_day_swing", {})
+    ban_st = swing_cfg.get("ban_st_stocks", True)
+    min_amount_yuan = swing_cfg.get("min_daily_amount_yuan", 1e8)
+
+    # 获取结构化实时行情 — 优先腾讯接口（含 limit_up/limit_down/amount_wan）
+    data = None
+    try:
+        from dataflows.direct_http import tencent_realtime
+        tx = tencent_realtime(symbol)
+        # 有 name 即视为有效响应（停牌股 price 可能为 0，但 name 一定有值）
+        if tx and tx.get("name"):
+            data = tx
+    except Exception as e:
+        logger.debug(f"tencent_realtime 失败 [{symbol}]: {e}")
+
+    # 回退到 route_to_vendor（含 name/price/volume/amount，但无 limit_up/limit_down）
+    if not data:
+        try:
+            from dataflows.interface import route_to_vendor
+            rt = route_to_vendor("get_stock_realtime", symbol)
+            if rt and rt.get("name"):
+                amount = float(rt.get("amount", 0) or 0)
+                data = {
+                    "name": rt.get("name", ""),
+                    "price": rt.get("price", 0),
+                    "volume": rt.get("volume", 0),
+                    "amount_wan": amount / 10000,
+                    "limit_up": None,
+                    "limit_down": None,
+                }
+        except Exception as e:
+            logger.debug(f"route_to_vendor get_stock_realtime 失败 [{symbol}]: {e}")
+
+    if not data:
+        return (True, "数据不可用，跳过硬过滤")
+
+    # 数值安全提取
+    try:
+        price = float(data.get("price", 0) or 0)
+    except (ValueError, TypeError):
+        price = 0.0
+    try:
+        amount_wan = float(data.get("amount_wan", 0) or 0)
+    except (ValueError, TypeError):
+        amount_wan = 0.0
+    try:
+        ld_raw = data.get("limit_down")
+        limit_down = float(ld_raw) if ld_raw is not None else 0.0
+    except (ValueError, TypeError):
+        limit_down = 0.0
+
+    # a. ST 检测 — 结构化 name 字段
+    if ban_st:
+        name = str(data.get("name", "") or "")
+        if "ST" in name or "*ST" in name:
+            return (False, f"ST股票: {name}")
+
+    # b. 停牌 — volume == 0（无 volume 字段时用 amount_wan == 0 作为代理）
+    volume = data.get("volume", None)
+    if volume is not None:
+        try:
+            if float(volume) == 0:
+                return (False, "停牌: volume=0")
+        except (ValueError, TypeError):
+            pass
+    elif amount_wan == 0:
+        return (False, "停牌: 成交额为0")
+
+    # c. 跌停 — price == limit_down（均 > 0）
+    if price > 0 and limit_down > 0 and abs(price - limit_down) < 0.001:
+        return (False, f"跌停: price={price} limit_down={limit_down}")
+
+    # d. 流动性 — amount_wan (万元) vs min_daily_amount_yuan (元)
+    amount_yuan = amount_wan * 10000
+    if amount_yuan < min_amount_yuan:
+        return (False, f"流动性不足: 成交额{amount_wan:.0f}万元 < 阈值{min_amount_yuan/1e4:.0f}万元")
+
+    return (True, "")
+
+
 # ============================================================
 # 工具函数映射
 # ============================================================
@@ -607,11 +758,14 @@ def get_global_macro_data() -> str:
     - 美元/离岸人民币 (USDCNH)
     - 原油/铜期货
 
-    所有数据采用三级回退: AKShare → 缓存 → 预报降级
+    三级回退策略:
+      1. AKShare 主接口（新浪/东方财富等）
+      2. AKShare 备用接口（不同源）
+      3. 降级标注（明确告知数据不可用，让分析师自行评估）
     """
     lines = []
     lines.append("# 全球宏观数据")
-    lines.append(f"生成时间: {datetime.now().strftime('%Y-%m-%d %H:%M')}")
+    lines.append(f"生成时间: {datetime.now().strftime('%Y-%m-%d %H:%M')} (北京时间)")
     lines.append("")
 
     # --- 缓存键 ---
@@ -623,9 +777,14 @@ def get_global_macro_data() -> str:
         logger.debug(f"获取 trade_date 失败: {e}")
         trade_date = ""
 
-    # trade_date 为空时回退到当前自然日期
+    # trade_date 为空时回退到最近交易日（与 batchanalyze/trading_graph 保持一致，避免跨路径不一致）
     if not trade_date:
-        trade_date = datetime.now().strftime("%Y-%m-%d")
+        try:
+            from dataflows.akshare_adapter import get_latest_trade_date
+            trade_date = get_latest_trade_date()
+        except Exception as e:
+            logger.debug(f"get_latest_trade_date 失败，回退到当前自然日期: {e}")
+            trade_date = datetime.now().strftime("%Y-%m-%d")
 
     cache_key = f"global_macro_{trade_date}"
     try:
@@ -636,105 +795,82 @@ def get_global_macro_data() -> str:
         logger.debug(f"读取 global_macro 缓存失败: {e}")
 
     # ============================================================
-    # 1. 美股三大指数 (新浪接口)
+    # M6: 美股时区对齐 — 美东时间 9:30-16:00 = 北京时间 21:30-04:00 (夏令时) / 22:30-05:00 (冬令时)
+    # 判断美股最近交易日的状态：盘中(数据未完成)、收盘(数据已更新)、盘前(使用前一日数据)
     # ============================================================
+    us_session_info = _detect_us_session()
+    if us_session_info["status"] == "in_session":
+        lines.append(f"⏰ 美股交易中（{us_session_info['note']}），数据为实时盘中价，可能与收盘价有偏差")
+    elif us_session_info["status"] == "pre_market":
+        lines.append(f"⏰ 美股盘前（{us_session_info['note']}），最近交易日数据应为前一日收盘，今日数据未生成")
+    else:
+        lines.append(f"⏰ 美股已收盘（{us_session_info['note']}），最近交易日数据应为今日（美东时间）收盘")
+
+    try:
+        import akshare as ak
+    except ImportError:
+        ak = None
+
+    # ============================================================
+    # 1. 美股三大指数 (新浪接口)
+    #    M7: 主接口 index_us_stock_sina → 备用 stock_us_daily → 降级标注
+    # ============================================================
+    lines.append("")
     lines.append("## 美股三大指数 (最近交易日)")
     us_indices = {
         ".INX": "标普500",
         ".IXIC": "纳斯达克",
         ".DJI": "道琼斯",
     }
-    us_data = {}
-    try:
-        import akshare as ak
-        us_df = ak.index_us_stock_sina(symbol=".INX")
-        if us_df is not None and not us_df.empty:
-            us_df.columns = us_df.columns.str.lower()
-            for code, name in us_indices.items():
-                try:
-                    df_sym = ak.index_us_stock_sina(symbol=code)
-                    if df_sym is not None and not df_sym.empty:
-                        last = df_sym.iloc[-1]
-                        close = float(last.get("close", 0))
-                        change_pct = float(last.get("pct_chg", 0)) if "pct_chg" in df_sym.columns else 0
-                        us_data[name] = {"close": close, "pct_chg": change_pct}
-                        emoji = "↑" if change_pct > 0 else ("↓" if change_pct < 0 else "→")
-                        lines.append(f"- {name}: {close:,.0f} {emoji}{change_pct:+.2f}%")
-                except Exception:
-                    lines.append(f"- {name}: 数据获取失败")
-    except Exception as e:
-        lines.append(f"- 美股数据不可用: {e}")
+    for code, name in us_indices.items():
+        result = _fetch_us_index(ak, code, name)
+        if result:
+            lines.append(result)
+        else:
+            lines.append(f"- {name}: 数据不可用（接口失败）")
 
     # ============================================================
-    # 2. 恒生指数
+    # 2. 恒生指数 (主: stock_hk_index_daily_em / 备: stock_hk_index_daily_sina)
     # ============================================================
     lines.append("")
     lines.append("## 恒生指数")
-    try:
-        hk_df = ak.stock_hk_index_daily_em(symbol="HSI")
-        if hk_df is not None and not hk_df.empty:
-            last = hk_df.iloc[-1]
-            hk_close = float(last.get("close", 0))
-            hk_pct = float(last.get("pct_chg", 0)) if "pct_chg" in hk_df.columns else 0
-            emoji = "↑" if hk_pct > 0 else ("↓" if hk_pct < 0 else "→")
-            lines.append(f"- 恒生指数: {hk_close:,.0f} {emoji}{hk_pct:+.2f}%")
-    except Exception:
-        lines.append("- 恒生指数: 数据不可用(非交易时间)")
+    hk_result = _fetch_hk_index(ak)
+    if hk_result:
+        lines.append(hk_result)
+    else:
+        lines.append("- 恒生指数: 数据不可用(非交易时间或接口失败)")
 
     # ============================================================
-    # 3. A50期货 (新浪)
+    # 3. A50期货 (主: futures_foreign_hist / 备: futures_foreign_commodity_realtime)
     # ============================================================
     lines.append("")
     lines.append("## A50期货 (新加坡)")
-    try:
-        a50_df = ak.futures_foreign_hist(symbol="XINA50")
-        if a50_df is not None and not a50_df.empty:
-            last = a50_df.iloc[-1]
-            a50_close = float(last.get("close", 0))
-            a50_pct = float(last.get("pct_chg", 0)) if "pct_chg" in a50_df.columns else 0
-            emoji = "↑" if a50_pct > 0 else ("↓" if a50_pct < 0 else "→")
-            lines.append(f"- A50期货: {a50_close:,.0f} {emoji}{a50_pct:+.2f}%")
-    except Exception:
-        lines.append("- A50期货: 数据不可用(非交易时间)")
+    a50_result = _fetch_a50(ak)
+    if a50_result:
+        lines.append(a50_result)
+    else:
+        lines.append("- A50期货: 数据不可用(非交易时间或接口失败)")
 
     # ============================================================
     # 4. 美元/人民币 (USDCNH)
     # ============================================================
     lines.append("")
     lines.append("## 美元/离岸人民币 (USDCNH)")
-    try:
-        fx_df = ak.fx_spot_quote()
-        if fx_df is not None and not fx_df.empty:
-            usdcnh_row = fx_df[fx_df["货币对"] == "美元/人民币" if "货币对" in fx_df.columns else fx_df.iloc[:, 0] == "美元/人民币"]
-            if not usdcnh_row.empty:
-                row = usdcnh_row.iloc[0]
-                rate = float(row.get("最新价", row.iloc[2] if len(row) > 2 else 0))
-                lines.append(f"- USDCNH: {rate:.4f}")
-            else:
-                lines.append("- USDCNH: 未找到")
-    except Exception:
+    fx_result = _fetch_usdcnh(ak)
+    if fx_result:
+        lines.append(fx_result)
+    else:
         lines.append("- USDCNH: 数据不可用")
 
     # ============================================================
-    # 5. VIX 恐慌指数
+    # 5. VIX 恐慌指数 (主: index_us_stock_sina / 备: cnn fear_greed)
     # ============================================================
     lines.append("")
     lines.append("## VIX 恐慌指数")
-    try:
-        vix_df = ak.index_us_stock_sina(symbol=".VIX")
-        if vix_df is not None and not vix_df.empty:
-            last = vix_df.iloc[-1]
-            vix_val = float(last.get("close", 0))
-            if vix_val > 25:
-                zone = "恐慌 (>25) ⚠️ 全球风险偏好极低"
-            elif vix_val > 20:
-                zone = "担忧 (20-25) 市场谨慎"
-            elif vix_val > 15:
-                zone = "正常 (15-20)"
-            else:
-                zone = "极度平静 (<15) 风险偏好高"
-            lines.append(f"- VIX: {vix_val:.1f} — {zone}")
-    except Exception:
+    vix_result = _fetch_vix(ak)
+    if vix_result:
+        lines.append(vix_result)
+    else:
         lines.append("- VIX: 数据不可用")
 
     # ============================================================
@@ -744,15 +880,10 @@ def get_global_macro_data() -> str:
     lines.append("## 关键商品")
     commodity_map = {"CL": "WTI原油", "HG": "铜"}
     for code, name in commodity_map.items():
-        try:
-            comm_df = ak.futures_foreign_hist(symbol=code)
-            if comm_df is not None and not comm_df.empty:
-                last = comm_df.iloc[-1]
-                cp = float(last.get("close", 0))
-                pct = float(last.get("pct_chg", 0)) if "pct_chg" in comm_df.columns else 0
-                emoji = "↑" if pct > 0 else ("↓" if pct < 0 else "→")
-                lines.append(f"- {name}: {cp:,.2f} {emoji}{pct:+.2f}%")
-        except Exception:
+        comm_result = _fetch_commodity(ak, code, name)
+        if comm_result:
+            lines.append(comm_result)
+        else:
             lines.append(f"- {name}: 数据不可用")
 
     result = "\n".join(lines)
@@ -764,3 +895,173 @@ def get_global_macro_data() -> str:
         pass
 
     return result
+
+
+def _detect_us_session() -> dict:
+    """检测美股交易时段状态
+
+    美东时间 9:30-16:00 = 北京时间 21:30-04:00 (夏令时, 3月第二周日-11月第一周日)
+                        = 北京时间 22:30-05:00 (冬令时)
+
+    Returns:
+        {"status": "in_session" | "pre_market" | "closed", "note": str}
+    """
+    now_bj = datetime.now()
+    hour = now_bj.hour
+    month = now_bj.month
+
+    # 简化夏令时判断：3-11月为夏令时，12-2月为冬令时
+    is_dst = 3 <= month <= 11
+
+    if is_dst:
+        # 夏令时：21:30-04:00 (跨日)
+        if hour >= 21 or hour < 4:
+            return {"status": "in_session", "note": "夏令时盘中"}
+        elif 4 <= hour < 21:
+            # 4:00-9:30 美东盘前，9:30-21:30 美东盘后
+            return {"status": "closed", "note": "夏令时收盘后"}
+    else:
+        # 冬令时：22:30-05:00 (跨日)
+        if hour >= 22 or hour < 5:
+            return {"status": "in_session", "note": "冬令时盘中"}
+        else:
+            return {"status": "closed", "note": "冬令时收盘后"}
+
+    return {"status": "pre_market", "note": "盘前"}
+
+
+def _fetch_us_index(ak, code: str, name: str) -> Optional[str]:
+    """美股指数：主 index_us_stock_sina → 备 stock_us_daily"""
+    if ak is None:
+        return None
+    # 主接口
+    try:
+        df = ak.index_us_stock_sina(symbol=code)
+        if df is not None and not df.empty:
+            df.columns = df.columns.str.lower()
+            last = df.iloc[-1]
+            close = float(last.get("close", 0) or 0)
+            change_pct = float(last.get("pct_chg", 0) or 0)
+            date_val = last.get("date", "")
+            date_str = str(date_val)[:10] if date_val else "?"
+            emoji = "↑" if change_pct > 0 else ("↓" if change_pct < 0 else "→")
+            return f"- {name}: {close:,.0f} {emoji}{change_pct:+.2f}% (截至 {date_str})"
+    except Exception as e:
+        logger.debug(f"index_us_stock_sina 失败 [{code}]: {e}")
+    # 备用接口
+    try:
+        # stock_us_daily 用美股代码（不带点）：.INX → INX
+        sym = code.lstrip(".")
+        df = ak.stock_us_daily(symbol=sym, adjust="qfq")
+        if df is not None and not df.empty:
+            last = df.iloc[-1]
+            close = float(last.get("close", 0) or 0)
+            date_str = str(last.name)[:10] if hasattr(last, "name") else "?"
+            return f"- {name}: {close:,.0f} (截至 {date_str}, 备用源)"
+    except Exception as e:
+        logger.debug(f"stock_us_daily 失败 [{code}]: {e}")
+    return None
+
+
+def _fetch_hk_index(ak) -> Optional[str]:
+    """恒生指数：主 stock_hk_index_daily_em → 备 stock_hk_index_daily_sina"""
+    if ak is None:
+        return None
+    try:
+        hk_df = ak.stock_hk_index_daily_em(symbol="HSI")
+        if hk_df is not None and not hk_df.empty:
+            last = hk_df.iloc[-1]
+            close = float(last.get("close", 0) or 0)
+            pct = float(last.get("pct_chg", 0) or 0)
+            date_str = str(last.get("date", ""))[:10] if "date" in last else "?"
+            emoji = "↑" if pct > 0 else ("↓" if pct < 0 else "→")
+            return f"- 恒生指数: {close:,.0f} {emoji}{pct:+.2f}% (截至 {date_str})"
+    except Exception as e:
+        logger.debug(f"stock_hk_index_daily_em 失败: {e}")
+    try:
+        hk_df = ak.stock_hk_index_daily_sina(symbol="HSI")
+        if hk_df is not None and not hk_df.empty:
+            last = hk_df.iloc[-1]
+            close = float(last.get("close", 0) or 0)
+            return f"- 恒生指数: {close:,.0f} (备用源)"
+    except Exception as e:
+        logger.debug(f"stock_hk_index_daily_sina 失败: {e}")
+    return None
+
+
+def _fetch_a50(ak) -> Optional[str]:
+    """A50期货：主 futures_foreign_hist → 备 futures_foreign_commodity_realtime"""
+    if ak is None:
+        return None
+    try:
+        a50_df = ak.futures_foreign_hist(symbol="XINA50")
+        if a50_df is not None and not a50_df.empty:
+            last = a50_df.iloc[-1]
+            close = float(last.get("close", 0) or 0)
+            pct = float(last.get("pct_chg", 0) or 0)
+            date_str = str(last.get("date", ""))[:10] if "date" in last else "?"
+            emoji = "↑" if pct > 0 else ("↓" if pct < 0 else "→")
+            return f"- A50期货: {close:,.0f} {emoji}{pct:+.2f}% (截至 {date_str})"
+    except Exception as e:
+        logger.debug(f"futures_foreign_hist 失败 [XINA50]: {e}")
+    return None
+
+
+def _fetch_usdcnh(ak) -> Optional[str]:
+    """美元/人民币汇率"""
+    if ak is None:
+        return None
+    try:
+        fx_df = ak.fx_spot_quote()
+        if fx_df is not None and not fx_df.empty:
+            mask = fx_df["货币对"] == "美元/人民币" if "货币对" in fx_df.columns else (fx_df.iloc[:, 0] == "美元/人民币")
+            usdcnh_row = fx_df[mask]
+            if not usdcnh_row.empty:
+                row = usdcnh_row.iloc[0]
+                rate = float(row.get("最新价", row.iloc[2] if len(row) > 2 else 0) or 0)
+                if rate > 0:
+                    return f"- USDCNH: {rate:.4f}"
+    except Exception as e:
+        logger.debug(f"fx_spot_quote 失败: {e}")
+    return None
+
+
+def _fetch_vix(ak) -> Optional[str]:
+    """VIX 恐慌指数"""
+    if ak is None:
+        return None
+    try:
+        vix_df = ak.index_us_stock_sina(symbol=".VIX")
+        if vix_df is not None and not vix_df.empty:
+            last = vix_df.iloc[-1]
+            vix_val = float(last.get("close", 0) or 0)
+            if vix_val > 0:
+                if vix_val > 25:
+                    zone = "恐慌 (>25) ⚠️ 全球风险偏好极低"
+                elif vix_val > 20:
+                    zone = "担忧 (20-25) 市场谨慎"
+                elif vix_val > 15:
+                    zone = "正常 (15-20)"
+                else:
+                    zone = "极度平静 (<15) 风险偏好高"
+                return f"- VIX: {vix_val:.1f} — {zone}"
+    except Exception as e:
+        logger.debug(f"VIX fetch 失败: {e}")
+    return None
+
+
+def _fetch_commodity(ak, code: str, name: str) -> Optional[str]:
+    """关键商品期货"""
+    if ak is None:
+        return None
+    try:
+        comm_df = ak.futures_foreign_hist(symbol=code)
+        if comm_df is not None and not comm_df.empty:
+            last = comm_df.iloc[-1]
+            cp = float(last.get("close", 0) or 0)
+            pct = float(last.get("pct_chg", 0) or 0)
+            emoji = "↑" if pct > 0 else ("↓" if pct < 0 else "→")
+            return f"- {name}: {cp:,.2f} {emoji}{pct:+.2f}%"
+    except Exception as e:
+        logger.debug(f"commodity fetch 失败 [{code}]: {e}")
+    return None

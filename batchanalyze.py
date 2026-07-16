@@ -88,6 +88,13 @@ STOCKS = unique_stocks
 # ============================================================
 TRADE_DATE = get_latest_trade_date()
 print(f"📅 最近交易日: {TRADE_DATE}")
+# C8/C9 修复：盘中运行时提示当日数据不完整
+from dataflows.akshare_adapter import is_market_closed
+if not is_market_closed() and datetime.now().weekday() < 5:
+    print(
+        f"⚠️  盘中运行：使用 {TRADE_DATE} 数据（盘中运行，当日数据不完整，"
+        f"收盘后重新运行可获取当日收盘数据）"
+    )
 BATCH_ID = datetime.now().strftime("%Y%m%d_%H%M%S")
 RESULTS_BASE = project_dir / "data" / "batch_results"
 

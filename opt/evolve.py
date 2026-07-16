@@ -321,20 +321,21 @@ def discover(history: List[Dict] = None, force: bool = False) -> dict:
     base_url = os.environ.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1")
     import requests
 
-    def _call_deepseek(system: str, user: str) -> dict:
+    def _call_deepseek(system: str, user: str) -> str:
+        """统一返回 LLM 响应文本（content 字符串）。
+
+        无论走 optimizer LLM 工厂还是 HTTP 回退，都返回纯文本，
+        由调用方自行解析 JSON。
+        """
         # 优先用 optimizer LLM 工厂（支持多 provider）
         if llm_opt is not None:
             try:
                 from langchain_core.messages import HumanMessage, SystemMessage
                 messages = [SystemMessage(content=system), HumanMessage(content=user)]
                 resp_text = llm_opt.invoke(messages).content
-                import json as _json
-                # 尝试解析 JSON
-                try:
-                    return _json.loads(resp_text)
-                except Exception:
-                    # 包裹为标准响应格式
-                    return {"choices": [{"message": {"content": resp_text}}]}
+                if isinstance(resp_text, list):
+                    resp_text = "".join(str(x) for x in resp_text)
+                return str(resp_text)
             except Exception:
                 pass
         # 回退：直接 HTTP 调用 DeepSeek
@@ -357,7 +358,8 @@ def discover(history: List[Dict] = None, force: bool = False) -> dict:
             timeout=120,
         )
         resp.raise_for_status()
-        return resp.json()
+        data = resp.json()
+        return data["choices"][0]["message"]["content"]
 
     system_prompt = """You are an Agent Architecture Analyst for a multi-agent stock trading system.
 
@@ -436,8 +438,7 @@ Maximum 2 proposals."""
             user_msg += "```\n{}\n```\n\n".format(t["trace_content"][:5000])
 
     try:
-        raw_resp = _call_deepseek(system_prompt, user_msg)
-        text = raw_resp["choices"][0]["message"]["content"]
+        text = _call_deepseek(system_prompt, user_msg)
         if not text or text.strip() == "":
             raise ValueError("LLM returned empty content")
 

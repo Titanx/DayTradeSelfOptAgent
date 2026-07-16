@@ -10,7 +10,7 @@
 rule: Day 0 盘后分析 → Day 1 开盘买入：如果看多，第二个交易日开盘即执行买入
 rule: Day 2 收盘前强制平仓：无论盈亏，持有仅 1 个交易日，Day 2 必须卖出
 rule: 不做空 / 不卖空：策略只做多单方向（Buy or Nothing）
-rule: 单只股票仓位 ≤ 30%：控制单票风险
+rule: 单只股票仓位 ≤ 20%：控制单票风险
 
 ## rules
 <!-- SKILLOPT-EDITABLE -->

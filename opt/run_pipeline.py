@@ -35,10 +35,28 @@ from opt.collector import collect, main as collector_main
 from opt.optimizer import run_optimizer
 from opt.aggregate import aggregate
 from opt.select import select as select_edits
-from opt.applier import apply_edits
+from opt.applier import apply_edits, restore_skills
 from opt.gate import gate
 from opt.debate_logger import save_trajectories, list_versions
 from opt.evolve import discover, record_run, detect_convergence, _load_accuracy_history
+
+# 用于记录上一轮 apply 时的准确率，供下一轮 gate 对比
+LAST_RUN_INFO_PATH = PROJECT_DIR / "opt" / "output" / "last_run.json"
+
+
+def _load_last_run() -> dict:
+    """加载上一轮 pipeline 的 apply 信息（accuracy + backup_dir）"""
+    if LAST_RUN_INFO_PATH.exists():
+        try:
+            return json.loads(LAST_RUN_INFO_PATH.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+    return {}
+
+
+def _save_last_run(info: dict):
+    LAST_RUN_INFO_PATH.parent.mkdir(parents=True, exist_ok=True)
+    LAST_RUN_INFO_PATH.write_text(json.dumps(info, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 def step_collect():
@@ -231,6 +249,33 @@ def main():
     if rollout_path.exists():
         rollout_data = json.loads(rollout_path.read_text(encoding="utf-8"))
 
+    # ============================================================
+    # Gate 回滚检查：对比上一轮 apply 前的 accuracy 与本轮 collect 得到的 accuracy
+    # 如果劣化（new < old），回滚到上一轮的 backup
+    # ============================================================
+    last_run = _load_last_run()
+    if last_run and last_run.get("applied") and last_run.get("backup_dir"):
+        old_acc = last_run.get("accuracy", 0)
+        new_acc = rollout_data.get("group_summary", {}).get("overall", {}).get("accuracy", 0)
+        if old_acc > 0 and new_acc > 0:
+            gate_result = gate(old_acc, new_acc,
+                               analysis="Post-apply regression check",
+                               edits=last_run.get("edits", []))
+            print("\nStep 1.5: Gate regression check")
+            print("  old_accuracy: {:.1f}%  new_accuracy: {:.1f}%  delta: {:+.1f}%".format(
+                old_acc, new_acc, new_acc - old_acc))
+            if not gate_result["accepted"]:
+                print("  ⚠️ Accuracy regressed after last apply. Rolling back skill files...")
+                restored = restore_skills(last_run["backup_dir"])
+                print("  ✅ Rolled back {} skill files".format(restored))
+                # 清除 last_run 避免重复回滚
+                _save_last_run({})
+                record_run(run_id, rollout_data, applied=False)
+                print("Pipeline stopped after rollback. Please re-run to optimize from restored baseline.")
+                return
+            else:
+                print("  ✅ Accuracy improved or stable. Keeping applied edits.")
+
     if args.collect_only:
         step_log_trajectories(run_id)
         record_run(run_id, rollout_data)
@@ -295,6 +340,17 @@ def main():
     # Step 4: Apply
     apply_result = step_apply()
     applied_edits = len(apply_result.get("applied", [])) > 0
+
+    # 保存本轮 apply 信息，供下一轮 pipeline 的 gate 回滚检查
+    if applied_edits:
+        _save_last_run({
+            "run_id": run_id,
+            "accuracy": current_accuracy,
+            "backup_dir": str(apply_result.get("backup_dir", "")),
+            "edits": [a.get("edit", {}) for a in apply_result.get("applied", [])],
+            "applied": True,
+            "timestamp": datetime.now().isoformat(),
+        })
 
     # Record this run
     record_run(run_id, rollout_data, edit_result, applied=applied_edits)

@@ -419,12 +419,26 @@ class MarketDataCache:
             return data
         return None
 
-    def set_stock_data(self, symbol: str, method: str, data: Any):
-        """写入个股缓存（内存 + MD + JSON）"""
+    def set_stock_data(self, symbol: str, method: str, data: Any, skip_disk: bool = False):
+        """写入个股缓存（内存 + MD + JSON）
+
+        Args:
+            symbol: 股票代码
+            method: 方法名
+            data: 数据
+            skip_disk: 若为 True，仅更新内存缓存，不写入磁盘。
+                       用于盘中实时行情：盘中价格不是收盘数据，
+                       写入磁盘会污染收盘数据缓存（C8 修复）。
+        """
         if not self._trade_date:
             return
         key = self._make_stock_key(symbol, method)
         self._stock_memory[key] = data
+
+        # 盘中实时价不写磁盘：避免污染收盘数据缓存
+        if skip_disk:
+            logger.info(f"📦 [个股缓存-仅内存] {symbol} {method}（盘中，不写磁盘）")
+            return
 
         filepath = self._get_stock_filepath(symbol, method)
         title = METHOD_TITLES.get(method, method)
@@ -488,13 +502,25 @@ class MarketDataCache:
         return None
 
     def invalidate_stock(self, symbol: str = None):
+        """失效个股缓存（内存 + 磁盘）"""
         if symbol:
             keys_to_del = [k for k in self._stock_memory if symbol in k]
             for k in keys_to_del:
                 del self._stock_memory[k]
+            # 清磁盘：删除该 symbol 的整个目录
+            symbol_dir = self.stock_cache_dir / symbol
+            if symbol_dir.exists():
+                import shutil
+                shutil.rmtree(symbol_dir, ignore_errors=True)
         else:
             self._stock_memory.clear()
-        logger.info("🧹 个股缓存已失效")
+            # 清磁盘：删除所有 symbol 子目录
+            if self.stock_cache_dir.exists():
+                import shutil
+                for d in self.stock_cache_dir.iterdir():
+                    if d.is_dir():
+                        shutil.rmtree(d, ignore_errors=True)
+        logger.info("🧹 个股缓存已失效 (内存+磁盘)")
 
     # ================================================================
     # 内部: key / 文件路径
@@ -638,7 +664,11 @@ class MarketDataCache:
             logger.info(f"📅 [历史回填] get_north_flow: 磁盘已有 {existing} 天，随每日运行累积")
 
     def _backfill_stock_prices(self, symbols: list, days: int = 30):
-        """拉取个股日线历史，按交易日分文件存入 stock_cache"""
+        """拉取个股日线历史，按交易日分文件存入 stock_cache
+
+        注意：price_daily 的 key 和文件名只用 K 线日期（date），不含 trade_date，
+        避免同一份历史数据因运行日期不同而被重复存储。
+        """
         from .akshare_adapter import get_stock_price_history
 
         for symbol in symbols:
@@ -653,11 +683,14 @@ class MarketDataCache:
                 date = item.get("date", "")
                 if not date:
                     continue
-                key = self._make_stock_key(symbol, f"price_daily_{date}")
+                # price_daily 的 key 只用 date，不含 trade_date
+                key = f"price_daily_{symbol}_{date}"
                 if key in self._stock_memory:
                     continue
-                # 检查是否已有磁盘文件
-                filepath = self._get_stock_filepath(symbol, f"price_daily_{date}")
+                # 文件名也只用 date，不含 trade_date
+                dirpath = self.stock_cache_dir / symbol
+                dirpath.mkdir(parents=True, exist_ok=True)
+                filepath = dirpath / f"price_daily_{date}.md"
                 if filepath.with_suffix(".cache.json").exists():
                     continue
 
@@ -681,28 +714,102 @@ class MarketDataCache:
 
     def load_stock_price_history(self, symbols: list, days: int = 30) -> int:
         """从磁盘加载指定个股的近期价格历史到内存"""
-        if not self._trade_date:
-            return 0
         count = 0
         for symbol in symbols:
             sdir = self.stock_cache_dir / symbol
             if not sdir.exists():
                 continue
-            for f in sorted(sdir.glob(f"{self._trade_date}_price_daily_*.md"), reverse=True):
+            # 文件名格式：price_daily_{date}.md（不含 trade_date）
+            for f in sorted(sdir.glob("price_daily_*.md"), reverse=True):
                 try:
-                    date_str = f.stem.rsplit("_", 1)[1]
-                    key = self._make_stock_key(symbol, f"price_daily_{date_str}")
+                    date_str = f.stem.replace("price_daily_", "")
+                    key = f"price_daily_{symbol}_{date_str}"
                     if key in self._stock_memory:
                         continue
-                    data = self._load_stock_disk(symbol, f"price_daily_{date_str}")
-                    if data is not None:
-                        self._stock_memory[key] = data
-                        count += 1
+                    json_path = f.with_suffix(".cache.json")
+                    if json_path.exists():
+                        data = json.loads(json_path.read_text(encoding="utf-8"))
+                        if data is not None:
+                            self._stock_memory[key] = data
+                            count += 1
                     if count >= days * len(symbols):
                         return count
                 except Exception:
                     pass
         return count
+
+    # ================================================================
+    # 磁盘缓存清理
+    # ================================================================
+
+    def cleanup_disk_cache(self, keep_days: int = 30) -> dict:
+        """清理过期磁盘缓存文件，保留最近 keep_days 天。
+
+        清理三个缓存目录：market_cache（公共）、opinion_cache（舆情）、stock_cache（个股）。
+        price_daily 文件按文件名中的 date 判断，其他文件按文件修改时间判断。
+
+        Args:
+            keep_days: 保留最近多少天的缓存
+
+        Returns:
+            {"market": int, "opinion": int, "stock": int} 各目录删除的文件数
+        """
+        from datetime import datetime, timedelta
+        cutoff = datetime.now() - timedelta(days=keep_days)
+        deleted = {"market": 0, "opinion": 0, "stock": 0}
+
+        # 1. market_cache：按文件修改时间清理
+        if self.market_cache_dir.exists():
+            for f in self.market_cache_dir.glob("*"):
+                try:
+                    mtime = datetime.fromtimestamp(f.stat().st_mtime)
+                    if mtime < cutoff:
+                        f.unlink(missing_ok=True)
+                        deleted["market"] += 1
+                except Exception:
+                    pass
+
+        # 2. opinion_cache：按文件修改时间清理
+        if self.opinion_cache_dir.exists():
+            for f in self.opinion_cache_dir.glob("*"):
+                try:
+                    mtime = datetime.fromtimestamp(f.stat().st_mtime)
+                    if mtime < cutoff:
+                        f.unlink(missing_ok=True)
+                        deleted["opinion"] += 1
+                except Exception:
+                    pass
+
+        # 3. stock_cache：price_daily 按 date 清理，其他按 mtime
+        if self.stock_cache_dir.exists():
+            for symbol_dir in self.stock_cache_dir.iterdir():
+                if not symbol_dir.is_dir():
+                    continue
+                for f in symbol_dir.glob("*"):
+                    try:
+                        # price_daily 文件名含 date，优先用 date 判断
+                        if f.stem.startswith("price_daily_"):
+                            date_str = f.stem.replace("price_daily_", "")
+                            try:
+                                file_date = datetime.strptime(date_str, "%Y-%m-%d")
+                                if file_date < cutoff:
+                                    f.unlink(missing_ok=True)
+                                    deleted["stock"] += 1
+                                continue
+                            except ValueError:
+                                pass
+                        # 其他文件按 mtime 判断
+                        mtime = datetime.fromtimestamp(f.stat().st_mtime)
+                        if mtime < cutoff:
+                            f.unlink(missing_ok=True)
+                            deleted["stock"] += 1
+                    except Exception:
+                        pass
+
+        total = sum(deleted.values())
+        if total > 0:
+            logger.info(f"🧹 磁盘缓存清理: 删除 {total} 个过期文件 (>={keep_days}天) {deleted}")
+        return deleted
 
     # ================================================================
     # 内部: 实时拉取

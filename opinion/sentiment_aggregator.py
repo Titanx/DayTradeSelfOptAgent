@@ -82,6 +82,10 @@ def aggregate_sentiment(symbol: str, stock_name: str = "",
         except Exception as e:
             logger.warning(f"微博情绪获取失败: {e}")
 
+    # 3.5 微信源（配置中可能声明，但代码未实现，跳过避免报错）
+    if "wechat" in sources:
+        logger.warning("微信源未实现，已跳过")
+
     # 4. 计算综合评分
     result["overall_score"] = _compute_overall_score(result["sources"])
 
@@ -115,13 +119,7 @@ def _fetch_financial_news(symbol: str, stock_name: str,
         if news:
             return {"count": len(news), "items": news[:limit]}
 
-        # fallback
-        import requests
-        query = f"{stock_name or symbol} 股票"
-        url = "https://r.jina.ai/https://search.sina.com.cn/"
-        params = {"q": query, "range": "all", "c": "news", "num": limit}
-        headers = {"User-Agent": "Mozilla/5.0"}
-        r = requests.get(url, params=params, headers=headers, timeout=10)
+        # fallback: 主接口失败时直接返回空（原 Jina Reader 回退因响应未使用已移除）
         return {"count": 0, "items": [], "note": "新闻获取受限"}
     except Exception as e:
         logger.error(f"新闻获取失败: {e}")
@@ -130,6 +128,9 @@ def _fetch_financial_news(symbol: str, stock_name: str,
 
 def _fetch_weibo_sentiment(symbol: str, stock_name: str) -> Dict[str, Any]:
     """通过搜索获取微博相关情绪"""
+    # DEPRECATED: 使用 Jina Reader (r.jina.ai) 抓取微博搜索结果，属于脆弱的第三方代理抓取方案。
+    # 该函数被 _WEB_AVAILABLE (Agent-Reach WebChannel) 门控，但实际并未使用 WebChannel，
+    # 且 Agent-Reach 目录不存在时该函数永远不会被调用。建议迁移到 WebChannel 或直接移除。
     query = stock_name or symbol
     try:
         # 使用 Jina Reader 搜索微博

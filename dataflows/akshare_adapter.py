@@ -45,13 +45,122 @@ def _safe_akshare_call(func):
 # 工具函数
 # ============================================================
 
+# 节假日缓存: 同一会话内只拉取一次 akshare 交易日历
+_TRADE_DATE_CACHE: Optional[set] = None
+_TRADE_DATE_FETCHED_AT: Optional[datetime] = None
+
+
+def _load_trade_calendar() -> Optional[set]:
+    """加载 A 股交易日历（含节假日信息）
+
+    使用 akshare.tool_trade_date_hist_sina() 获取历年交易日列表。
+    同一会话内只拉取一次，缓存到模块级变量。
+
+    Returns:
+        set of "YYYY-MM-DD" 字符串（交易日集合）；失败返回 None
+    """
+    global _TRADE_DATE_CACHE, _TRADE_DATE_FETCHED_AT
+
+    # 缓存有效期 24 小时（避免会话跨日时使用过期数据）
+    if _TRADE_DATE_CACHE is not None and _TRADE_DATE_FETCHED_AT is not None:
+        if (datetime.now() - _TRADE_DATE_FETCHED_AT).total_seconds() < 86400:
+            return _TRADE_DATE_CACHE
+
+    try:
+        import akshare as ak
+        df = ak.tool_trade_date_hist_sina()
+        if df is None or df.empty:
+            return _TRADE_DATE_CACHE  # 拉取失败时返回上一次缓存（可能为 None）
+        # 列名: trade_date (datetime 类型)
+        col = "trade_date" if "trade_date" in df.columns else df.columns[0]
+        dates = set(pd.to_datetime(df[col]).dt.strftime("%Y-%m-%d").tolist())
+        _TRADE_DATE_CACHE = dates
+        _TRADE_DATE_FETCHED_AT = datetime.now()
+        logger.info(f"📅 A股交易日历加载成功: {len(dates)} 个交易日")
+        return dates
+    except Exception as e:
+        logger.debug(f"加载交易日历失败（将回退到周末判断）: {e}")
+        return _TRADE_DATE_CACHE  # 失败时返回上一次缓存
+
+
+def is_market_closed() -> bool:
+    """
+    判断 A 股是否已收盘（收盘后数据需要 30 分钟更新）。
+
+    返回 True 当且仅当当前时间 >= 15:30（确保数据已更新）。
+    周末返回 False（周末没有盘中，不强制等待；调用方应自行返回最近工作日）。
+
+    Returns:
+        True: 市场已收盘，可使用当日收盘数据
+        False: 市场未收盘（盘中）或周末，当日数据不完整
+    """
+    now = datetime.now()
+    # 周末视为"未在盘中"（不触发等待收盘逻辑）
+    if now.weekday() >= 5:  # 周六=5、周日=6
+        return False
+    # 工作日：15:30 后视为收盘（留 30 分钟给数据源更新）
+    return now.hour > 15 or (now.hour == 15 and now.minute >= 30)
+
+
 def get_latest_trade_date() -> str:
     """
     获取最近一个A股交易日日期 (YYYY-MM-DD)。
 
-    逻辑：通过获取上证指数最近K线，取最后一天作为最近交易日。
-    如果获取失败，或返回日期距今超过3个自然日，则回退到排除周末的最近工作日。
+    逻辑：
+    - 优先使用 akshare 交易日历（含节假日信息，如国庆/春节）
+    - 如果当前为盘中时段（工作日 9:30 前 / 15:30 前），返回昨日交易日
+      （因为今日数据未完成，缓存为"昨日数据"会污染收盘数据）
+    - 如果当前为收盘后或周末，使用交易日历确认最近交易日
+
+    周末不输出盘中 warning（周末没有盘中）。
     """
+    trade_calendar = _load_trade_calendar()
+    now = datetime.now()
+
+    # 盘中或周末：返回最近交易日（不调用 akshare 实时接口）
+    if not is_market_closed():
+        # 用交易日历回退找最近交易日（处理节假日：如周一为节假日时返回上周五）
+        if trade_calendar is not None:
+            # 从昨日开始往前找最近的交易日
+            for offset in range(0, 15):  # 最多往前找 15 天（覆盖春节 7 天假期）
+                check_date = (now - timedelta(days=offset + 1)).strftime("%Y-%m-%d")
+                if check_date in trade_calendar:
+                    if now.weekday() < 5:
+                        logger.warning(
+                            f"⚠️ 当前为盘中时段（未收盘），使用最近交易日数据: {check_date}（当日数据不完整）"
+                        )
+                    return check_date
+            # 日历中找不到，落到下面的兜底逻辑
+
+        # 无交易日历或日历中找不到 → 回退到排除周末的逻辑
+        if now.weekday() == 5:  # 周六
+            trade_date = (now - timedelta(days=1)).strftime("%Y-%m-%d")
+        elif now.weekday() == 6:  # 周日
+            trade_date = (now - timedelta(days=2)).strftime("%Y-%m-%d")
+        elif now.weekday() == 0:  # 周一盘中：返回上周五
+            trade_date = (now - timedelta(days=3)).strftime("%Y-%m-%d")
+        else:  # 工作日盘中：返回昨日
+            trade_date = (now - timedelta(days=1)).strftime("%Y-%m-%d")
+        # 工作日盘中输出 warning（周末不输出，因为周末没有盘中）
+        if now.weekday() < 5:
+            logger.warning(
+                f"⚠️ 当前为盘中时段（未收盘），使用昨日数据: {trade_date}（当日数据不完整）"
+            )
+        return trade_date
+
+    # 已收盘：用交易日历确认今日是否为交易日
+    if trade_calendar is not None:
+        today_str = now.strftime("%Y-%m-%d")
+        # 今日是交易日 → 返回今日
+        if today_str in trade_calendar:
+            return today_str
+        # 今日不是交易日（如节假日） → 往前找最近的交易日
+        for offset in range(1, 15):
+            check_date = (now - timedelta(days=offset)).strftime("%Y-%m-%d")
+            if check_date in trade_calendar:
+                return check_date
+
+    # 回退：使用上证指数最近 K 线确认最近交易日
     try:
         import akshare as ak
         df = ak.stock_zh_index_daily(symbol="sh000001")
@@ -64,7 +173,7 @@ def get_latest_trade_date() -> str:
     except Exception:
         pass
 
-    # 回退：排除周末，往前找最近工作日
+    # 最终回退：排除周末，往前找最近工作日
     today = datetime.now()
     if today.weekday() == 5:  # 周六
         today -= timedelta(days=1)
@@ -157,7 +266,11 @@ def get_stock_daily(symbol: str, start_date: str = None, end_date: str = None,
 @_safe_akshare_call
 def get_stock_realtime(symbol: str) -> Optional[Dict[str, Any]]:
     """
-    获取A股实时行情快照（多源回退 — 优先单股接口，避免拉取全市场5000+股票）
+    获取A股实时行情快照（多源回退）
+
+    回退链: 东财直连(单股) → 新浪直连(单股) → 腾讯直连(单股)
+            → AKShare 东方财富(全市场快照) → AKShare 新浪(全市场快照)
+            → AKShare 日K线最后一日
 
     Args:
         symbol: 股票代码
@@ -165,30 +278,22 @@ def get_stock_realtime(symbol: str) -> Optional[Dict[str, Any]]:
     Returns:
         dict with: name, price, change_pct, volume, high, low, open, pre_close
     """
-    # 0. 优先用腾讯/新浪单股HTTP接口（轻量级，不拉全市场）
-    try:
-        from .direct_http import tencent_realtime
-        tx = tencent_realtime(symbol)
-        if tx and tx.get("price", 0) > 0:
-            return {
-                "symbol": symbol,
-                "name": tx.get("name", ""),
-                "price": tx.get("price", 0),
-                "change_pct": tx.get("change_pct", 0),
-                "change": tx.get("change_amt", 0),
-                # NOTE: volume 由 amount/price 反推，为近似值（真实应为 VWAP 除法）
-                "volume": int(tx.get("amount_wan", 0) * 10000 / max(tx.get("price", 1), 0.01)),
-                "amount": tx.get("amount_wan", 0) * 10000,
-                "high": tx.get("high", 0),
-                "low": tx.get("low", 0),
-                "open": tx.get("open", 0),
-                "pre_close": tx.get("last_close", 0),
-                "turnover_rate": tx.get("turnover_pct", None),
-                "pe": tx.get("pe_ttm", None),
-                "total_mv": tx.get("mcap_yi", 0) * 1e8 if tx.get("mcap_yi") else None,
-            }
-    except Exception:
-        pass
+    # M4+M5: 优先使用 direct_http 的三家直连单股接口（轻量、不拉全市场）
+    # 回退顺序与项目设计一致: 东财 → 新浪 → 腾讯
+    from .direct_http import eastmoney_realtime, sina_realtime, tencent_realtime
+
+    for fetcher_name, fetcher in [
+        ("eastmoney", eastmoney_realtime),
+        ("sina", sina_realtime),
+        ("tencent", tencent_realtime),
+    ]:
+        try:
+            data = fetcher(symbol)
+            if data and data.get("price", 0) > 0:
+                # 统一字段名（直连接口返回 amount/limit_up/limit_down，与下方 akshare 路径保持兼容）
+                return _normalize_realtime(data, symbol)
+        except Exception as e:
+            logger.debug(f"{fetcher_name}_realtime 失败 [{symbol}]: {e}")
 
     try:
         import akshare as ak
@@ -196,7 +301,7 @@ def get_stock_realtime(symbol: str) -> Optional[Dict[str, Any]]:
         ak = None
 
     if ak is not None:
-        # 1. 尝试东方财富源（全市场快照，作为回退）
+        # AKShare 东方财富源（全市场快照，作为回退，开销大但稳定）
         try:
             df = ak.stock_zh_a_spot_em()
             if df is not None and not df.empty:
@@ -223,9 +328,8 @@ def get_stock_realtime(symbol: str) -> Optional[Dict[str, Any]]:
         except Exception:
             pass
 
-        # 2. 尝试腾讯源实时行情
+        # AKShare 新浪源（全市场快照，作为再回退）
         try:
-            prefix = "sh" if symbol.startswith(("6", "9")) else "sz"
             df = ak.stock_zh_a_spot()
             if df is not None and not df.empty:
                 row = df[df["代码"] == symbol]
@@ -247,7 +351,7 @@ def get_stock_realtime(symbol: str) -> Optional[Dict[str, Any]]:
         except Exception:
             pass
 
-        # 3. 从个股日K线取最近一天数据作为替代
+        # 从个股日K线取最近一天数据作为最终回退（非实时，但保证有数据）
         try:
             prefix = "sh" if symbol.startswith(("6", "9")) else "sz"
             df = ak.stock_zh_a_daily(
@@ -258,48 +362,91 @@ def get_stock_realtime(symbol: str) -> Optional[Dict[str, Any]]:
             )
             if df is not None and not df.empty and "date" in df.columns:
                 last = df.iloc[-1]
+                close = float(last.get("close", 0))
+                pct = float(last.get("pct_change", 0) or 0)
                 return {
                     "symbol": symbol,
                     "name": "",
-                    "price": float(last.get("close", 0)),
-                    "change_pct": float(last.get("pct_change", 0) or 0),
+                    "price": close,
+                    "change_pct": pct,
                     "change": float(last.get("change", 0) or 0),
                     "volume": int(float(last.get("volume", 0) or 0)),
                     "amount": float(last.get("amount", 0) or 0),
                     "high": float(last.get("high", 0) or 0),
                     "low": float(last.get("low", 0) or 0),
                     "open": float(last.get("open", 0) or 0),
-                    "pre_close": float(last.get("close", 0)) * (1 - float(last.get("pct_change", 0) or 0) / 100) if float(last.get("pct_change", 0) or 0) else float(last.get("close", 0)),
+                    "pre_close": close / (1 + pct / 100) if pct else close,
                 }
         except Exception:
             pass
 
-    # 4. 腾讯HTTP直连兜底（不封IP，AKShare全挂时最后防线）
-    try:
-        from .direct_http import tencent_realtime
-        rt = tencent_realtime(symbol)
-        if rt is not None:
-            return {
-                "symbol": symbol,
-                "name": rt.get("name", ""),
-                "price": rt.get("price", 0),
-                "change_pct": rt.get("change_pct", 0),
-                "change": rt.get("change_amt", 0),
-                "volume": 0,
-                "amount": rt.get("amount_wan", 0) * 10000 if rt.get("amount_wan") else 0,
-                "high": rt.get("high", 0),
-                "low": rt.get("low", 0),
-                "open": rt.get("open", 0),
-                "pre_close": rt.get("last_close", 0),
-                "turnover_rate": rt.get("turnover_pct"),
-                "pe": rt.get("pe_ttm"),
-                "total_mv": rt.get("mcap_yi", 0) * 1e8 if rt.get("mcap_yi") else None,
-                "circ_mv": rt.get("float_mcap_yi", 0) * 1e8 if rt.get("float_mcap_yi") else None,
-            }
-    except Exception:
-        pass
-
     return None
+
+
+def _normalize_realtime(data: dict, symbol: str) -> Dict[str, Any]:
+    """将 direct_http 各源返回的 dict 统一为 get_stock_realtime 的标准输出格式
+
+    直连接口字段: name/price/last_close/open/high/low/volume/amount/...
+    标准输出:     name/price/pre_close/change/change_pct/volume/amount/high/low/open
+                 + 可选 turnover_rate/pe/total_mv/circ_mv/limit_up/limit_down
+    """
+    price = float(data.get("price", 0) or 0)
+    last_close = float(data.get("last_close", 0) or 0)
+    change = float(data.get("change_amt", price - last_close) or 0)
+    change_pct = float(data.get("change_pct", 0) or 0)
+    if change_pct == 0 and last_close > 0:
+        change_pct = (price - last_close) / last_close * 100
+    # amount: 东财/新浪返回元；腾讯返回 amount_wan (万元)
+    if "amount" in data and data["amount"]:
+        amount = float(data["amount"] or 0)
+    elif "amount_wan" in data and data["amount_wan"]:
+        amount = float(data["amount_wan"] or 0) * 10000
+    else:
+        amount = 0.0
+    # volume: 东财/新浪返回股；腾讯无 volume（需通过 amount/price 反推近似）
+    if "volume" in data and data["volume"]:
+        volume = float(data["volume"] or 0)
+    elif amount > 0 and price > 0:
+        volume = amount / price
+    else:
+        volume = 0.0
+    mcap_yi = float(data.get("mcap_yi", 0) or 0)
+    float_mcap_yi = float(data.get("float_mcap_yi", 0) or 0)
+
+    result = {
+        "symbol": symbol,
+        "name": data.get("name", ""),
+        "price": price,
+        "change_pct": change_pct,
+        "change": change,
+        "volume": int(volume),
+        "amount": amount,
+        "high": float(data.get("high", 0) or 0),
+        "low": float(data.get("low", 0) or 0),
+        "open": float(data.get("open", 0) or 0),
+        "pre_close": last_close,
+    }
+
+    # 可选字段（直连接口才有，akshare 全市场快照有部分）
+    turnover = data.get("turnover_pct") or data.get("turnover_rate")
+    if turnover is not None:
+        result["turnover_rate"] = float(turnover)
+    pe = data.get("pe_ttm") or data.get("pe")
+    if pe is not None:
+        result["pe"] = float(pe)
+    pb = data.get("pb")
+    if pb is not None:
+        result["pb"] = float(pb)
+    if mcap_yi:
+        result["total_mv"] = mcap_yi * 1e8
+    if float_mcap_yi:
+        result["circ_mv"] = float_mcap_yi * 1e8
+    # limit_up/limit_down（结构化硬过滤需要）
+    if "limit_up" in data:
+        result["limit_up"] = float(data["limit_up"])
+    if "limit_down" in data:
+        result["limit_down"] = float(data["limit_down"])
+    return result
 
 
 def get_sector_fund_flow(sector_name: str = None, days: int = 3) -> Optional[Dict]:

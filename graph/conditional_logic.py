@@ -91,8 +91,11 @@ class ConditionalLogic:
                     return "bear_researcher"
                 elif last_str.startswith("Bear:"):
                     return "bull_researcher"
-                # 其他情况默认到 bull_researcher（安全回退）
-            return "bull_researcher"
+                # M3: 兜底 — 用 count 判断下一个该谁发言，避免返回不在映射中的值导致 KeyError
+                # count 为偶数（含0）→ Bull 先发言；count 为奇数 → Bear 接着发言
+                return "bull_researcher" if count % 2 == 0 else "bear_researcher"
+        # 无消息时默认进入 Bull
+        return "bull_researcher"
 
     # ============================================================
     # 风险辩论路由

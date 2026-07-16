@@ -96,7 +96,7 @@ class ResearchPlan(BaseModel):
 class TraderProposal(BaseModel):
     """交易员提案 — 一日游策略专用"""
     action: TraderAction = Field(description="交易动作: Buy=Day1开盘买入 / Hold=观望 / Sell=(策略不出卖单)")
-    position_pct: Optional[float] = Field(None, ge=0, le=0.3, description="仓位比例 (单股≤30%)")
+    position_pct: Optional[float] = Field(None, ge=0, le=0.2, description="仓位比例 (单股≤20%)")
     entry_signal: Optional[str] = Field(None, description="Day1入场信号条件")
     day1_upside_catalyst: Optional[str] = Field(None, description="看好Day1上涨≥1%的具体理由")
     expected_gain_pct: Optional[float] = Field(None, ge=1.0, description="预期Day1涨幅%，策略底线≥1%")
@@ -108,7 +108,7 @@ class PortfolioDecision(BaseModel):
     """最终投资决策 — 一日游策略"""
     rating: PortfolioRating = Field(description="最终评级 (Day1是否值得买入)")
     action: TraderAction = Field(description="最终动作: Buy=Day1开盘买入/Hold=观望")
-    position_pct: Optional[float] = Field(None, ge=0, le=0.3, description="建议仓位")
+    position_pct: Optional[float] = Field(None, ge=0, le=0.2, description="建议仓位")
     confidence: float = Field(ge=0, le=1, description="决策信心度 (Day1上涨≥1%的概率)")
     executive_summary: str = Field(description="一日游执行摘要: Day1买入理由 + Day2卖出规则")
     investment_thesis: str = Field(description="看多核心论题 (为什么Day1会涨)")

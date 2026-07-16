@@ -143,11 +143,19 @@ def build_user_message(rollout_data: dict) -> str:
 
     msg += "\n## Current Skill Files (SKILLOPT-EDITABLE regions only)\n\n"
     skill_files = rollout_data.get("skill_files", {})
-    for skill_name in ["bull_researcher", "bear_researcher", "portfolio_manager",
-                       "trader", "research_manager"]:
-        content = skill_files.get(skill_name, "")
-        if content:
-            msg += "### {}\n```markdown\n{}\n```\n\n".format(skill_name, content[:3000])
+    # M9: 发送所有 skill 文件（不只5个），并放宽截断到 10000 字符
+    # 之前只发 5 个核心文件 + 每个截断 3000 字符，会丢失关键上下文
+    MAX_SKILL_CHARS = 10000
+    if skill_files:
+        for skill_name in sorted(skill_files.keys()):
+            content = skill_files.get(skill_name, "")
+            if not content:
+                continue
+            if len(content) > MAX_SKILL_CHARS:
+                content = content[:MAX_SKILL_CHARS] + "\n... (truncated, total {} chars)".format(len(content))
+            msg += "### {}\n```markdown\n{}\n```\n\n".format(skill_name, content)
+    else:
+        msg += "(skill_files 为空，请检查 collector 是否已加载 skill 文件)\n"
 
     return msg
 

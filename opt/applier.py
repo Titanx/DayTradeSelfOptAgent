@@ -38,6 +38,29 @@ def backup_skills():
     return backup_dir
 
 
+def restore_skills(backup_dir) -> int:
+    """从 snapshots/ 目录回滚所有 skill 文件。
+
+    Args:
+        backup_dir: backup_skills() 返回的 Path 或字符串
+
+    Returns:
+        恢复的文件数
+    """
+    backup_dir = Path(backup_dir)
+    if not backup_dir.exists():
+        print("Restore failed: backup dir not found: {}".format(backup_dir))
+        return 0
+
+    count = 0
+    for sf in backup_dir.glob("*.skill.md"):
+        target = SKILLS_DIR / sf.name
+        shutil.copy2(sf, target)
+        count += 1
+    print("Restored {} skill files from {}".format(count, backup_dir))
+    return count
+
+
 def parse_skill_sections(content: str) -> Dict[str, List[str]]:
     """解析 skill 文件的 section → 行列表。只返回 SKILLOPT-EDITABLE 区域内的行。
 
@@ -64,10 +87,49 @@ def parse_skill_sections(content: str) -> Dict[str, List[str]]:
     return sections
 
 
+def _is_section_editable(content: str, section_name: str) -> bool:
+    """检查指定 section 是否在 SKILLOPT-EDITABLE 标记之后（即可编辑）。
+
+    规则：
+    - section 内（从 ## header 到下一个 ## 或文件末尾）出现 SKILLOPT-EDITABLE → 可编辑
+    - section 内只有其他注释（如"不可更改"）→ 不可编辑
+    """
+    lines = content.split("\n")
+    section_header = "## " + section_name
+    in_section = False
+    for line in lines:
+        stripped = line.strip()
+        if stripped == section_header:
+            in_section = True
+            continue
+        if in_section:
+            if stripped.startswith("## "):
+                # 进入下一个 section，退出
+                break
+            if "SKILLOPT-EDITABLE" in line:
+                return True
+    return False
+
+
+# 最小长度校验：delete/replace 的 old 文本太短会误删/误改大量行
+_MIN_OLD_TEXT_LEN = 10
+
+
 def apply_edit_to_content(content: str, edit: dict) -> str:
-    """对 skill 文件内容应用单条编辑，返回新内容。"""
+    """对 skill 文件内容应用单条编辑，返回新内容。
+
+    安全校验：
+    1. 只允许编辑带 SKILLOPT-EDITABLE 标记的 section（策略铁律等不可改）
+    2. delete/replace 的 old 文本必须 ≥ _MIN_OLD_TEXT_LEN 字符，避免误删
+    """
     action = edit["action"]
     section_name = edit["section"]
+
+    # 边界校验：只允许编辑 SKILLOPT-EDITABLE section
+    if not _is_section_editable(content, section_name):
+        print("  ⚠️ 跳过：section '{}' 未标记 SKILLOPT-EDITABLE，不可编辑".format(section_name))
+        return content
+
     lines = content.split("\n")
 
     if action == "add":
@@ -117,6 +179,10 @@ def apply_edit_to_content(content: str, edit: dict) -> str:
 
     elif action == "delete":
         old_text = edit.get("old", "").strip()
+        if len(old_text) < _MIN_OLD_TEXT_LEN:
+            print("  ⚠️ 跳过 delete：old 文本过短 ({}<{})，可能误删多行".format(
+                len(old_text), _MIN_OLD_TEXT_LEN))
+            return content
         new_lines = []
         for line in lines:
             stripped = line.strip()
@@ -128,6 +194,10 @@ def apply_edit_to_content(content: str, edit: dict) -> str:
     elif action == "replace":
         old_text = edit.get("old", "").strip()
         new_text = edit.get("new", "").strip()
+        if len(old_text) < _MIN_OLD_TEXT_LEN:
+            print("  ⚠️ 跳过 replace：old 文本过短 ({}<{})，可能误改多行".format(
+                len(old_text), _MIN_OLD_TEXT_LEN))
+            return content
         new_lines = []
         for line in lines:
             stripped = line.strip()

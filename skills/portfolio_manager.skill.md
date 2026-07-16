@@ -20,7 +20,7 @@ rule: 聚焦 24 小时持有期内能否获利
 rule: 做出最终决策：Buy（Day1买入）或 Hold（不出手）
 rule: 给出明确的信心度评估
 rule: 评级: Buy / Overweight / Hold / Underweight / Sell（实际上只有 Buy/Overweight=Day1买入, 其余=不参与）
-rule: 仓位: 0-30%（总资金占比）
+rule: 仓位: 0-20%（总资金占比）
 rule: 信心度: 0.0-1.0（代表 Day1 上涨 ≥1% 的评估概率）
 
 ## decision_rules

@@ -58,26 +58,24 @@ DEFAULT_CONFIG = {
 
     # --- 新闻与舆论配置 ---
     "news_limit": 20,                    # 每条搜索结果数上限
-    "opinion_sources": ["xueqiu", "weibo", "wechat", "news"],
+    "opinion_sources": ["xueqiu", "weibo", "news"],
     "enable_opinion_monitor": True,      # 启用舆论监控
 
     # --- 交易参数 ---
     "initial_capital": 100000,           # 初始资金
-    "max_position_pct": 0.3,             # 单只股票最大仓位
-    "stop_loss_pct": 0.08,              # 止损线 8%
-    "take_profit_pct": 0.20,            # 止盈线 20%
-    "holding_period_days": 5,            # 默认持仓天数
+    "max_position_pct": 0.2,             # 单只股票最大仓位 (与 README 一致: 20%)
 
     # --- 一日游策略参数 (One-Day Swing) ---
     "strategy_mode": "one_day_swing",    # 策略模式: one_day_swing (默认)
     "one_day_swing": {
         "holding_days": 1,               # 持有 1 个交易日
         "exit_rule": "forced_close",     # Day 2 收盘前强制平仓
-        "target_gain_pct": 1.0,          # 目标涨幅 ≥1%（扣除 0.11% 成本后净利约 0.89%）
+        "target_gain_pct": 1.0,          # 目标涨幅 ≥1%（止盈线，扣除 0.11% 成本后净利约 0.89%）
+        "stop_loss_pct": 3.0,            # 止损线 -3% (Day2 日内最低 ≤ 买价-3% 强制平仓)
         "min_daily_amount_yuan": 1e8,    # 最小日成交额: 1 亿元 (流动性门槛)
         "max_recent_gain_pct": 15,       # 近 5 日最大涨幅: 15% (追高过滤)
         "ban_st_stocks": True,           # 禁止 ST 股票
-        "max_position_pct": 0.3,         # 单票仓位上限
+        "max_position_pct": 0.2,         # 单票仓位上限 (与 README 一致: 20%)
     },
 
     # --- 基准指数 ---
@@ -122,8 +120,6 @@ _ENV_OVERRIDES = {
     "ASTOCK_MAX_DEBATE_ROUNDS": "max_debate_rounds",
     "ASTOCK_MAX_RISK_ROUNDS": "max_risk_discuss_rounds",
     "ASTOCK_DEBUG": "debug",
-    "ASTOCK_STOP_LOSS_PCT": "stop_loss_pct",
-    "ASTOCK_TAKE_PROFIT_PCT": "take_profit_pct",
     "ASTOCK_INITIAL_CAPITAL": "initial_capital",
 }
 

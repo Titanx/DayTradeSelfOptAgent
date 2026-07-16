@@ -64,31 +64,8 @@ def get_xueqiu_quote(symbol: str) -> Optional[Dict[str, Any]]:
         except Exception as e:
             logger.warning(f"雪球行情获取失败 [{symbol}]: {e}")
 
-    # HTTP fallback
-    try:
-        import requests
-        symbol_code = symbol[2:] if len(symbol) > 2 else symbol
-        market = 17 if symbol.startswith("SZ") else 1  # 17=深交所, 1=上交所
-        url = f"https://stock.xueqiu.com/v5/stock/quote.json?symbol={symbol}&extend=detail"
-        headers = {"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
-        r = requests.get(url, headers=headers, timeout=10)
-        if r.status_code == 200:
-            data = r.json().get("data", {}).get("quote", {})
-            return {
-                "symbol": data.get("symbol", symbol),
-                "name": data.get("name", ""),
-                "current": data.get("current", 0),
-                "percent": data.get("percent", 0),
-                "high": data.get("high", 0),
-                "low": data.get("low", 0),
-                "volume": data.get("volume", 0),
-                "amount": data.get("amount", 0),
-                "market_capital": data.get("market_capital", 0),
-                "pe_ttm": data.get("pe_ttm", 0),
-            }
-    except Exception as e:
-        logger.error(f"雪球HTTP回退失败 [{symbol}]: {e}")
-
+    # HTTP fallback - v5 需 cookie，v4 已废弃，直连受限
+    logger.warning("HTTP 直连雪球受限(v5需cookie/v4已废弃)，建议使用 Agent-Reach Channel")
     return None
 
 
@@ -115,30 +92,8 @@ def get_xueqiu_hot_posts(symbol: str = None, limit: int = 20) -> List[Dict[str, 
         except Exception as e:
             logger.warning(f"雪球热门帖子获取失败: {e}")
 
-    # HTTP fallback
-    try:
-        import requests
-        url = "https://xueqiu.com/v4/statuses/public_timeline_by_category.json"
-        params = {"page": 1, "count": limit}
-        headers = {"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
-        r = requests.get(url, params=params, headers=headers, timeout=10)
-        if r.status_code == 200:
-            items = r.json().get("list", [])
-            posts = []
-            for item in items:
-                data = item.get("data", item)
-                posts.append({
-                    "id": data.get("id", ""),
-                    "title": (data.get("title") or data.get("description", ""))[:100],
-                    "text": (data.get("text") or data.get("description", ""))[:300],
-                    "author": data.get("user", {}).get("screen_name", ""),
-                    "likes": data.get("like_count", 0),
-                    "url": f"https://xueqiu.com{data.get('target', data.get('id', ''))}",
-                })
-            return posts[:limit]
-    except Exception as e:
-        logger.error(f"雪球HTTP回退热门帖子失败: {e}")
-
+    # HTTP fallback - v5 需 cookie，v4 已废弃，直连受限
+    logger.warning("HTTP 直连雪球受限(v5需cookie/v4已废弃)，建议使用 Agent-Reach Channel")
     return []
 
 
@@ -159,28 +114,8 @@ def get_xueqiu_hot_stocks(limit: int = 20) -> List[Dict[str, Any]]:
         except Exception as e:
             logger.warning(f"雪球热门股票获取失败: {e}")
 
-    # HTTP fallback
-    try:
-        import requests
-        url = "https://stock.xueqiu.com/v5/stock/hot_stock/list.json"
-        params = {"size": limit, "_type": 10}
-        headers = {"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
-        r = requests.get(url, params=params, headers=headers, timeout=10)
-        if r.status_code == 200:
-            items = r.json().get("data", {}).get("items", [])
-            return [
-                {
-                    "symbol": item.get("symbol", ""),
-                    "name": item.get("name", ""),
-                    "current": item.get("current", 0),
-                    "percent": item.get("percent", 0),
-                    "rank": i + 1,
-                }
-                for i, item in enumerate(items)
-            ][:limit]
-    except Exception as e:
-        logger.error(f"雪球HTTP回退热门股票失败: {e}")
-
+    # HTTP fallback - v5 需 cookie，v4 已废弃，直连受限
+    logger.warning("HTTP 直连雪球受限(v5需cookie/v4已废弃)，建议使用 Agent-Reach Channel")
     return []
 
 
@@ -195,32 +130,8 @@ def search_xueqiu_posts(query: str, limit: int = 20) -> List[Dict[str, Any]]:
     Returns:
         相关帖子列表
     """
-    try:
-        import requests
-        url = "https://xueqiu.com/query/v1/search/web/search.json"
-        params = {"q": query, "count": limit, "page": 1}
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-            "Accept": "application/json",
-        }
-        r = requests.get(url, params=params, headers=headers, timeout=10)
-        if r.status_code == 200:
-            statuses = r.json().get("list", {}).get("statuses", [])
-            posts = []
-            for item in statuses:
-                posts.append({
-                    "id": item.get("id", ""),
-                    "title": item.get("title", "")[:100],
-                    "text": item.get("description", item.get("text", ""))[:300],
-                    "author": item.get("user", {}).get("screen_name", ""),
-                    "likes": item.get("like_count", 0),
-                    "comments": item.get("reply_count", 0),
-                    "created_at": item.get("created_at", 0),
-                })
-            return posts[:limit]
-    except Exception as e:
-        logger.error(f"雪球搜索失败 [{query}]: {e}")
-
+    # HTTP 直连雪球受限 - 搜索接口需 cookie，直连返回 401/403
+    logger.warning("HTTP 直连雪球受限(v5需cookie/v4已废弃)，建议使用 Agent-Reach Channel")
     return []
 
 

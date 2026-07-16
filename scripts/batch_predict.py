@@ -431,18 +431,40 @@ def main():
             agent = AStockTradingGraph(config=cfg)
             result = agent.analyze(symbol=code, trade_date=trade_date, stock_name=name)
             dt = time.time() - t0
+
+            # H4 硬过滤：ST/流动性/跌停/停牌 — 双保险（trading_graph 内已过滤，此处再校验）
             rating = result.get("rating", "?")
+            if rating in ("Buy", "Overweight"):
+                try:
+                    from agents.utils.agent_utils import hard_filter_stock
+                    allowed, reason = hard_filter_stock(code, cfg)
+                    if not allowed:
+                        rating = "Hold"
+                        result["rating"] = "Hold"
+                        result["action"] = "Hold"
+                        result["decision"] = (result.get("decision", "") or "") + \
+                            f"\n\n**硬过滤**: {reason} → 强制 Hold"
+                        with print_lock:
+                            print(f"   ⚠️ 硬过滤拦截 {code} {name}: {reason} → Hold")
+                except Exception as hf_err:
+                    logging.warning(f"硬过滤执行失败 [{code}]: {hf_err}")
+
             conf = result.get("confidence", 0)
+            pos = result.get("position_pct")
             with print_lock:
                 elapsed = time.time() - start_time
                 eta = (elapsed / max(idx, 1)) * (total - idx) if idx > 0 else 0
-                print(f"[{idx:2d}/{total}] {code} {name} ({sector}) → {rating} ({conf:.0%}) ⏱{dt:.0f}s | ETA {eta/60:.0f}min")
-            return {"code": code, "name": name, "sector": sector, "rating": rating, "conf": conf, "ok": True}
+                pos_str = f" pos={pos:.0%}" if pos else ""
+                print(f"[{idx:2d}/{total}] {code} {name} ({sector}) → {rating} ({conf:.0%}){pos_str} ⏱{dt:.0f}s | ETA {eta/60:.0f}min")
+            return {"code": code, "name": name, "sector": sector,
+                    "rating": rating, "conf": conf,
+                    "position_pct": pos, "ok": True}
         except Exception as e:
             dt = time.time() - t0
             with print_lock:
                 print(f"[{idx:2d}/{total}] {code} {name} ({sector}) → ❌ {str(e)[:80]} ⏱{dt:.0f}s")
-            return {"code": code, "name": name, "sector": sector, "rating": "ERR", "conf": 0, "ok": False}
+            return {"code": code, "name": name, "sector": sector,
+                    "rating": "ERR", "conf": 0, "position_pct": None, "ok": False}
 
     with ThreadPoolExecutor(max_workers=args.workers) as executor:
         futures = {}
@@ -473,12 +495,29 @@ def main():
             emoji = {"Buy": "🟢", "Overweight": "🟡", "Hold": "⚪", "Underweight": "🟠", "Sell": "🔴", "ERR": "❌"}[rating]
             print(f"  {emoji} {rating}: {by_rating[rating]} 只")
 
+    # 仓位归一化：Buy/Overweight 的 position_pct 等比压缩至总仓 ≤ 100%
+    max_pos = config.get("max_position_pct", 0.2)
+    buy_items = [r for r in all_results if r["rating"] in ("Buy", "Overweight") and r.get("position_pct")]
+    total_raw = sum(r["position_pct"] for r in buy_items)
+    if total_raw > 1.0:
+        # 等比压缩
+        scale = 1.0 / total_raw
+        for r in buy_items:
+            r["position_pct"] = round(r["position_pct"] * scale, 4)
+        print(f"\n📐 仓位归一化: 原始总仓 {total_raw:.0%} > 100%，等比压缩至 100%")
+    elif buy_items:
+        for r in buy_items:
+            if r.get("position_pct") is None:
+                # Buy 但未给出仓位 → 默认分配 max_pos
+                r["position_pct"] = max_pos
+
     for rating in ["Buy", "Overweight", "Hold", "Underweight", "Sell", "ERR"]:
         if by_rating[rating]:
             items = [r for r in all_results if r["rating"] == rating]
             print(f"\n{rating}:")
             for r in items:
-                print(f"  {r['code']} {r['name']} ({r['sector']}) conf={r['conf']:.0%}")
+                pos_str = f" pos={r['position_pct']:.0%}" if r.get("position_pct") else ""
+                print(f"  {r['code']} {r['name']} ({r['sector']}) conf={r['conf']:.0%}{pos_str}")
 
 
 if __name__ == "__main__":

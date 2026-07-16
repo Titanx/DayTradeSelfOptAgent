@@ -139,6 +139,19 @@ class GraphSetup:
 
             # 创建分析师节点函数
             def make_analyst_node(cfg, report_key):
+                from agents.schemas import (
+                    FundamentalReport, TechnicalReport,
+                    SentimentReport, PolicyReport,
+                    render_fundamental_report, render_technical_report,
+                    render_sentiment_report, render_policy_report,
+                )
+                render_map = {
+                    FundamentalReport: render_fundamental_report,
+                    TechnicalReport: render_technical_report,
+                    SentimentReport: render_sentiment_report,
+                    PolicyReport: render_policy_report,
+                }
+
                 def node_fn(state: AgentState) -> dict:
                     context = (
                         f"## 分析任务\n"
@@ -146,6 +159,13 @@ class GraphSetup:
                         f"- 股票名称: {state.get('stock_name', '')}\n"
                         f"- 分析日期: {state['trade_date']}\n\n"
                     )
+
+                    # M1: 注入市场方向闸门，让 Phase 1 分析师与市场方向一致
+                    direction = state.get("market_direction", "")
+                    if direction:
+                        context += f"## ⚠️ 市场方向闸门 (必须遵守)\n{direction}\n\n"
+                    else:
+                        context += "## ⚠️ 市场方向闸门 (默认)\nNEUTRAL — 未检测到明确市场方向信号，按默认规则正常判断\n\n"
 
                     data_context = state.get("data_context", "")
                     if data_context:
@@ -164,13 +184,22 @@ class GraphSetup:
                     except Exception as e:
                         logger.debug(f"历史决策加载失败: {e}")
 
-                    # 有预计算数据时无需绑定工具
+                    # 有预计算数据时无需绑定工具，优先尝试结构化输出
                     if data_context:
-                        all_messages = [
+                        messages = [
                             SystemMessage(content=cfg["system_prompt"]),
                             HumanMessage(content=context),
                         ]
-                        response = quick.invoke(all_messages)
+                        schema_cls = cfg.get("structured_output")
+                        render_fn = render_map.get(schema_cls) if schema_cls else None
+                        if schema_cls and render_fn:
+                            try:
+                                llm_structured = quick.with_structured_output(schema_cls)
+                                report_obj = llm_structured.invoke(messages)
+                                return {"messages": [AIMessage(content=render_fn(report_obj))]}
+                            except Exception as e:
+                                logger.warning(f"{cfg.get('name','分析师')} 结构化输出失败，回退到自由文本: {e}")
+                        response = quick.invoke(messages)
                     else:
                         tools = cfg.get("tools", [])
                         if tools:
@@ -235,7 +264,7 @@ class GraphSetup:
 
         def make_researcher_node(cfg, role_prefix: str):
             def node_fn(state: AgentState) -> dict:
-                context = self._build_debate_context(state)
+                context = self._build_debate_context(state, caller_prefix=role_prefix)
                 messages = [SystemMessage(content=cfg["system_prompt"]),
                            HumanMessage(content=context)]
                 response = quick.invoke(messages)
@@ -516,13 +545,16 @@ class GraphSetup:
     # 上下文构建辅助方法
     # ============================================================
 
-    def _build_debate_context(self, state: dict, include_macro_data: bool = True) -> str:
+    def _build_debate_context(self, state: dict, include_macro_data: bool = True,
+                              caller_prefix: str = None) -> str:
         """为研究员辩论构建上下文
 
         Args:
             include_macro_data: 是否注入 data_context 摘要。Bull/Bear/Reversal
                 传 True（需要隔夜环境背景）；Sector/GlobalMacro 传 False，因为
                 它们会自行注入完整 data_context，避免重复。
+            caller_prefix: 调用方角色前缀 ("Bull: " / "Bear: ")。传入时注入对方
+                最近一条发言，让辩论真正成为"辩论"。None 时不注入。
         """
         parts = [f"## 分析标的: {state.get('stock_name', '')} ({state['symbol']})",
                  f"分析日期: {state['trade_date']}\n"]
@@ -555,6 +587,16 @@ class GraphSetup:
                 parts.append(f"### {title}\n{content}\n")
 
         parts.append("\n请基于以上分析报告，给出你的研究和辩论观点。")
+
+        # H12: 注入对方研究员发言，让辩论真正成为"辩论"而非独立陈述
+        if caller_prefix:
+            opponent_prefix = "Bear:" if caller_prefix.startswith("Bull") else "Bull:"
+            for m in reversed(state.get("messages", [])):
+                c = str(m.content) if hasattr(m, "content") else ""
+                if c.startswith(opponent_prefix):
+                    parts.append(f"\n### 对方观点\n{c[:800]}\n")
+                    break
+
         return "\n".join(parts)
 
     def _build_manager_context(self, state: dict) -> str:
@@ -620,16 +662,16 @@ class GraphSetup:
             f"交易日期: {state['trade_date']}\n",
             "请基于以下研究报告制定交易方案。\n",
         ]
-        # 读取 RM 输出（结构化渲染后含 **Investment Thesis** / **Rating**），
-        # 同时兼容自由文本含 "Research Plan"/"研究计划" 的情况
-        rm_keywords = ["**Investment Thesis**", "**Rating**:", "Research Plan", "研究计划", "Investment Thesis"]
+        # M2: Trader 是 RM 之后第一个发言的节点，直接取最后一条 AI 消息即 RM 输出，
+        # 避免关键字匹配误判前序分析师报告（如分析师报告中也可能出现 "研究计划"）。
         rm_found = False
-        for m in state.get("messages", []):
-            c = str(m.content) if hasattr(m, "content") else ""
-            if any(k in c for k in rm_keywords):
-                parts.append(c)
-                rm_found = True
-                break
+        for m in reversed(state.get("messages", [])):
+            if hasattr(m, "type") and m.type == "ai":
+                c = str(m.content) if hasattr(m, "content") else ""
+                if c.strip():
+                    parts.append(c)
+                    rm_found = True
+                    break
         if not rm_found:
             parts.append("(研究主管未产生研究计划，请基于宏观与市场数据谨慎决策)\n")
 
@@ -663,6 +705,13 @@ class GraphSetup:
         macro = state.get("global_macro_report", "")
         if macro:
             parts.append(f"\n### 全球宏观环境\n{macro[:400]}\n")
+
+        # 注入多空辩论原文，让风险分析师看到 Bull/Bear 完整论据（与 _build_manager_context 一致）
+        parts.append("\n### 多空辩论记录\n")
+        for m in state.get("messages", []):
+            c = str(m.content) if hasattr(m, "content") else ""
+            if "Bull:" in c or "Bear:" in c:
+                parts.append(c + "\n")
 
         # 交易员提案（结构化渲染后含 **Action**: / **Position**:）
         trader_keywords = ["**Action**:", "**Position**:", "Action:", "Position:"]
@@ -735,6 +784,13 @@ class GraphSetup:
             content = state.get(rpt_key, "")
             if content:
                 parts.append(f"### {rpt_name}\n{content}\n")
+
+        # 多空辩论原文（与 _build_manager_context / _build_risk_context 一致）
+        parts.append("### 多空辩论记录\n")
+        for m in state.get("messages", []):
+            c = str(m.content) if hasattr(m, "content") else ""
+            if "Bull:" in c or "Bear:" in c:
+                parts.append(c + "\n")
 
         # 交易员提案（结构化渲染后含 **Action**: / **Position**:）
         trader_keywords = ["**Action**:", "**Position**:", "Action:", "Position:"]

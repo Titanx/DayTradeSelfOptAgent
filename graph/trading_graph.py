@@ -327,7 +327,9 @@ class AStockTradingGraph:
             }
         """
         if trade_date is None:
-            trade_date = datetime.now().strftime("%Y-%m-%d")
+            # C8 修复：盘中运行时返回昨日（避免使用未完成的今日数据）
+            from dataflows.akshare_adapter import get_latest_trade_date
+            trade_date = get_latest_trade_date()
 
         # 标准化代码
         symbol = symbol.strip()
@@ -387,6 +389,20 @@ class AStockTradingGraph:
         decision_text = final_state.get("final_decision", "")
         rating, action, confidence = self._parse_decision(decision_text)
 
+        # H4 硬过滤：ST/流动性/跌停/停牌 — 仅拦截 Buy/Overweight
+        if rating in ("Buy", "Overweight"):
+            try:
+                from agents.utils.agent_utils import hard_filter_stock
+                allowed, reason = hard_filter_stock(symbol, self.config)
+                if not allowed:
+                    logger.info(f"硬过滤拦截 [{symbol}] {rating}→Hold: {reason}")
+                    rating = "Hold"
+                    action = "Hold"
+                    decision_text = (decision_text or "") + \
+                        f"\n\n**硬过滤**: {reason} → 强制 Hold"
+            except Exception as e:
+                logger.warning(f"硬过滤执行失败 [{symbol}]: {e}")
+
         # 提取各报告
         reports = {
             "fundamental": final_state.get("fundamental_report", ""),
@@ -396,6 +412,18 @@ class AStockTradingGraph:
             "global_macro": final_state.get("global_macro_report", ""),
         }
 
+        # 解析仓位建议（从决策文本）
+        position_pct = None
+        try:
+            pos_match = re.search(r'\*\*Position\*\*:\s*([\d.]+)%?', decision_text)
+            if pos_match:
+                position_pct = float(pos_match.group(1)) / 100.0
+                # 硬约束：单票 ≤ 20%
+                max_pos = self.config.get("max_position_pct", 0.2)
+                position_pct = min(position_pct, max_pos)
+        except Exception:
+            pass
+
         result = {
             "symbol": symbol,
             "stock_name": stock_name,
@@ -404,6 +432,7 @@ class AStockTradingGraph:
             "rating": rating,
             "action": action,
             "confidence": confidence,
+            "position_pct": position_pct,
             "reports": reports,
             "debate_rounds": final_state.get("investment_debate_state", {}).get("count", 0),
             "risk_rounds": final_state.get("risk_debate_state", {}).get("count", 0),
@@ -439,9 +468,15 @@ class AStockTradingGraph:
         """
         自动结算上次分析 pending 决策的实际收益
 
+        策略对齐 (与 README + collector.py + batch_backtest.py 一致):
+          Day0(决策日)收盘分析 → Day1 开盘买入 → Day2 止盈/止损/收盘平仓
+            HIT   = 看多 + Day2 日内最高 ≥ 买价+1%  → 止盈平仓 (+1%)
+            STOP  = 看多 + Day2 日内最低 ≤ 买价-3%  → 止损平仓 (-3%)
+            FLAT  = 看多 + 未触发                   → Day2 收盘平仓
+
         流程:
         1. 查找该 ticker 的 pending 条目（上次分析时写入的决策）
-        2. 用 AKShare 获取持仓期内股价 → 计算实际收益率
+        2. 用 AKShare 获取持仓期内股价 → 模拟止盈止损计算实际收益率
         3. 用基准指数计算 alpha（超额收益）
         4. LLM 生成一句反思文本
         5. 更新记忆日志（pending → resolved + 反思）
@@ -453,74 +488,100 @@ class AStockTradingGraph:
         if not ticker_pending:
             return
 
-        holding_days = self.config.get("one_day_swing", {}).get("holding_days", 1) + 1  # Day1买入→Day2收盘 = 2个自然日
+        # 策略参数
+        swing_cfg = self.config.get("one_day_swing", {})
+        target_gain_pct = swing_cfg.get("target_gain_pct", 1.0)
+        stop_loss_pct = swing_cfg.get("stop_loss_pct", 3.0)  # 新增字段，默认 3%
+
         outcomes = []
 
         for decision_date, decision_symbol, entry_text in ticker_pending:
             try:
-                # 计算结算日期 = 决策日期 + 持仓天数
-                from datetime import timedelta
-                settle_date_dt = datetime.strptime(decision_date, "%Y-%m-%d") + timedelta(days=holding_days)
-                settle_date = settle_date_dt.strftime("%Y%m%d")
-
-                # 获取股价数据：决策日 vs 结算日
+                # 获取股价数据（多取几天确保能找到 Day1/Day2）
                 from dataflows.akshare_adapter import get_stock_daily
                 df = get_stock_daily(symbol, start_date=f"{decision_date.replace('-', '')[:6]}01")
                 if df is None or df.empty:
                     continue
 
-                close_prices = None
+                # 构建 date -> (open, close, high, low) 映射
+                price_map = {}
                 if "close" in df.columns:
-                    df["date_str"] = df["date"].dt.strftime("%Y-%m-%d") if hasattr(df["date"], "dt") else df["date"].astype(str)
-                    close_prices = {r["date_str"][:10]: r["close"] for _, r in df.iterrows()}
+                    for _, r in df.iterrows():
+                        date_str = str(r["date"])[:10]
+                        o = float(r.get("open", r.get("开盘", 0)) or 0)
+                        c = float(r.get("close", r.get("收盘", 0)) or 0)
+                        h = float(r.get("high", r.get("最高", 0)) or 0)
+                        l = float(r.get("low", r.get("最低", 0)) or 0)
+                        price_map[date_str] = (o, c, h, l)
                 else:
                     continue
 
                 decision_clean = decision_date[:10]
-                settle_clean = settle_date_dt.strftime("%Y-%m-%d")
-
-                entry_price = close_prices.get(decision_clean)
-                exit_price = close_prices.get(settle_clean)
-                if exit_price is None:
-                    # 周末/节假日场景：优先取 settle_clean 之后的下一个交易日（Day2强制平仓）
-                    # 若无下一个交易日，回退到之前最近交易日
-                    future = sorted([d for d in close_prices if d > settle_clean])
-                    if future:
-                        exit_price = close_prices[future[0]]
-                    else:
-                        nearby = sorted([d for d in close_prices if d <= settle_clean])
-                        if nearby:
-                            exit_price = close_prices[nearby[-1]]
-
-                if entry_price is None or exit_price is None:
+                if decision_clean not in price_map:
                     continue
 
-                raw_return = (exit_price / entry_price - 1) * 100
-                raw_return = round(raw_return, 2)
+                # Day0(决策日) → Day1(买入日) → Day2(卖出日)
+                sorted_dates = sorted(price_map.keys())
+                try:
+                    d0_idx = sorted_dates.index(decision_clean)
+                except ValueError:
+                    continue
+                if d0_idx + 2 >= len(sorted_dates):
+                    # 数据不足，无法结算，保留 pending 等下次
+                    continue
+                d1_date = sorted_dates[d0_idx + 1]
+                d2_date = sorted_dates[d0_idx + 2]
+
+                d1_open = price_map[d1_date][0]   # Day1 开盘 = 买入价
+                d2_high = price_map[d2_date][2]   # Day2 日内最高
+                d2_low = price_map[d2_date][3]    # Day2 日内最低
+                d2_close = price_map[d2_date][1]  # Day2 收盘
+
+                # 模拟止盈止损
+                hit_price = d1_open * (1 + target_gain_pct / 100.0)
+                stop_price = d1_open * (1 - stop_loss_pct / 100.0)
 
                 # 提取评级信息
                 import re
                 rating_match = re.search(r'\*\*Rating\*\*:\s*(\w+)', entry_text)
                 rating = rating_match.group(1) if rating_match else "?"
 
-                # 简单反思（数据驱动版，不调LLM以省成本）
-                if raw_return > 5:
-                    hint = "大幅正收益"
-                elif raw_return > 0:
-                    hint = "小幅正收益"
-                elif raw_return > -5:
-                    hint = "小幅亏损"
+                is_bull = rating in ("Buy", "Overweight")
+                if is_bull:
+                    if d2_high >= hit_price:
+                        # 止盈触发
+                        raw_return = target_gain_pct
+                        hint = "止盈命中"
+                        exit_price = hit_price
+                    elif d2_low <= stop_price:
+                        # 止损触发
+                        raw_return = -stop_loss_pct
+                        hint = "止损出场"
+                        exit_price = stop_price
+                    else:
+                        # 收盘平仓
+                        raw_return = round((d2_close / d1_open - 1) * 100, 2)
+                        if raw_return > 0:
+                            hint = "收盘微盈平仓"
+                        else:
+                            hint = "收盘亏损平仓"
+                        exit_price = d2_close
                 else:
-                    hint = "大幅亏损"
+                    # 非看多决策，不实际持仓，记录机会成本
+                    raw_return = 0
+                    hint = "观望（未持仓）"
+                    exit_price = d1_open
+
+                raw_return = round(raw_return, 2)
 
                 reflection = (
-                    f"{hint}（{raw_return:+.2f}%，持仓{holding_days}天）。"
+                    f"{hint}（{raw_return:+.2f}%，Day1买{d1_open:.2f}→Day2卖{exit_price:.2f}）。"
                     f"上次评级[{rating}]。"
-                    f"入场{entry_price}→出场{exit_price}。"
+                    f"Day2高{d2_high:.2f}/低{d2_low:.2f}。"
                 )
 
                 outcomes.append((decision_date, decision_symbol, reflection))
-                logger.info(f"收益结算: {symbol} {decision_date} → {raw_return:+.2f}% [{rating}]")
+                logger.info(f"收益结算: {symbol} {decision_date} → {raw_return:+.2f}% [{rating}] {hint}")
 
             except Exception as e:
                 logger.warning(f"收益结算失败 [{symbol} {decision_date}]: {e}")
@@ -675,7 +736,9 @@ class AStockTradingGraph:
             分析结果列表
         """
         if trade_date is None:
-            trade_date = datetime.now().strftime("%Y-%m-%d")
+            # C8 修复：盘中运行时返回昨日（避免使用未完成的今日数据）
+            from dataflows.akshare_adapter import get_latest_trade_date
+            trade_date = get_latest_trade_date()
 
         results = []
         for i, symbol in enumerate(symbols):

@@ -79,12 +79,14 @@ def create_global_macro_analyst(llm, config: dict) -> dict:
 
     监控美股/港股/A50期货/VIX/汇率/商品等全球市场指标，
     评估隔夜外盘环境对次日A股的影响，填补"隔夜风险"盲区。
+    
+    注意: 全球市场数据通过 data_context 预注入到 LLM 上下文中，
+    无需绑定工具。如果需要 LLM 自主拉取，可解除注释并 bind_tools。
     """
     from agents.schemas import ResearchPlan
-    from agents.utils.agent_utils import get_global_macro_data
     return {
         "name": "全球宏观分析师",
         "system_prompt": get_system_prompt("global_macro_analyst"),
-        "tools": [get_global_macro_data],
+        "tools": [],
         "structured_output": ResearchPlan,
     }

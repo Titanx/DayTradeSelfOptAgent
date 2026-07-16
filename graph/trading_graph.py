@@ -347,8 +347,8 @@ class AStockTradingGraph:
             from dataflows.market_cache import MarketDataCache
             cache = MarketDataCache.get_instance()
             cache.set_trade_date(trade_date)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"缓存日期设置失败: {e}")
 
         # ========================================================
         # Phase 0: 自动结算历史 pending 决策的收益
@@ -453,7 +453,7 @@ class AStockTradingGraph:
         if not ticker_pending:
             return
 
-        holding_days = self.config.get("holding_period_days", 5)
+        holding_days = self.config.get("one_day_swing", {}).get("holding_days", 1) + 1  # Day1买入→Day2收盘 = 2个自然日
         outcomes = []
 
         for decision_date, decision_symbol, entry_text in ticker_pending:
@@ -534,7 +534,7 @@ class AStockTradingGraph:
         confidence = 0.5
 
         # 1. 尝试 Markdown 格式: **Rating**: Buy
-        rating_match = re.search(r'\*\*Rating\*\*:\s*(\w+)', text)
+        rating_match = re.search(r'\*\*Rating\*\*:\s*([\w\s]+?)(?:\s*\n|\s*$)', text)
         if rating_match:
             rating = rating_match.group(1)
 
@@ -568,6 +568,7 @@ class AStockTradingGraph:
         rating_map = {
             "buy": "Buy", "overweight": "Overweight", "hold": "Hold",
             "underweight": "Underweight", "sell": "Sell",
+            "strong buy": "Buy", "strong sell": "Sell",
         }
         rating = rating_map.get(rating.lower(), rating.title())
 

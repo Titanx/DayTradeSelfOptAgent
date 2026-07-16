@@ -161,8 +161,8 @@ class GraphSetup:
                         past = memory.get_past_context(state["symbol"])
                         if past:
                             context += f"\n## 历史决策参考\n{past}\n"
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.debug(f"历史决策加载失败: {e}")
 
                     # 有预计算数据时无需绑定工具
                     if data_context:
@@ -653,7 +653,7 @@ class GraphSetup:
         # 全球宏观环境 (EvoSkill v0.4)
         global_macro = state.get("global_macro_report", "")
         if global_macro:
-            parts.append(f"### 🌍 全球宏观隔夜环境\n{global_macro[:800]}\n")
+            parts.append(f"### 🌍 全球宏观隔夜环境\n{global_macro[:1200]}\n")
             if "Bearish" in global_macro:
                 parts.append("【全球宏观指令】隔夜外盘偏空，请优先评估隔夜风险。VIX高企或外盘大跌时，最多1个Buy且仓位≤10%。\n")
             elif "Bullish" in global_macro:

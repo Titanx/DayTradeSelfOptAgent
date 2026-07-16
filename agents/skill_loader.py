@@ -18,7 +18,27 @@ def _md_to_prompt(md_text: str) -> str:
     保持前端元数据(stage/strategy)和标记<!-- SKILLOPT-EDITABLE -->不变,
     以便 Optimizer LLM 后续编辑。
     """
-    return md_text
+    lines = md_text.split("\n")
+    out = []
+    in_editable = False
+    for line in lines:
+        if "SKILLOPT-EDITABLE" in line:
+            in_editable = True
+            out.append(line)
+            continue
+        if in_editable:
+            stripped = line.strip()
+            if stripped.startswith("rule:") or stripped.startswith("anti_pattern:"):
+                out.append(line)
+            elif stripped.startswith("## ") or stripped.startswith("---"):
+                in_editable = False
+                out.append(line)
+            elif stripped == "":
+                out.append(line)
+            # skip other lines inside editable section (explanatory text)
+        else:
+            out.append(line)
+    return "\n".join(out)
 
 
 def load_skill(name: str) -> Optional[str]:
@@ -43,7 +63,7 @@ def get_system_prompt(name: str) -> str:
     """
     skill = load_skill(name)
     if skill:
-        return skill
+        return _md_to_prompt(skill)
     return _LEGACY_FALLBACK.get(name, f"[MISSING PROMPT: {name}]")
 
 

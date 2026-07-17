@@ -68,7 +68,7 @@ def is_done(code, trade_date, version=""):
             d = json.loads(cache_file.read_text("utf-8"))
             if d.get("rating", "ERR") != "ERR":
                 return True, d["rating"]
-        except:
+        except Exception:
             pass
     return False, None
 
@@ -408,7 +408,10 @@ def main():
         print(f"\n✅ 数据就绪: {len(todo)} 只，即将开始辩论")
         print("=" * 60)
     else:
+        # H2: --no-overview 分支补默认值，避免 analyze_one 引用未定义变量导致 NameError
         shared_overview = ""
+        market_direction = "市场方向: NEUTRAL (跳过预加载)"
+        sector_momentum = {}
 
     if not todo:
         print("全部数据不完整，无股票可分析。")

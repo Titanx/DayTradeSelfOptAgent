@@ -96,8 +96,7 @@ def main():
 
         valid=hit+avoid+flat+stop+step
         bull=hit+stop+flat
-        pnl=hit*0.01 + stop*(-0.03)
-        # can't compute flat pnl in batch easily, skip for summary
+        # L: pnl 计算已移除（flat pnl 在批量回测中无法准确计算，详见单股回测脚本）
         all_results[label]={"N":valid,"HIT":hit,"STOP":stop,"FLAT":flat,
             "AVOID":avoid,"STEP":step,"BULL":bull}
         print(f"  {label}: 有效{valid} HIT={hit} STOP={stop} FLAT={flat} AVOID={avoid} STEP={step} | 看多{bull}只")

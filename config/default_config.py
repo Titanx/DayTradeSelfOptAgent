@@ -78,9 +78,9 @@ DEFAULT_CONFIG = {
         "max_position_pct": 0.2,         # 单票仓位上限 (与 README 一致: 20%)
     },
 
-    # --- 基准指数 ---
-    "benchmark_ticker": "000300",        # 默认沪深300
-    "benchmark_map": {
+    # --- 基准指数 --- (M4: 以下两项 legacy, not read — 实际基准在 akshare_adapter 中硬编码)
+    "benchmark_ticker": "000300",        # legacy, not read
+    "benchmark_map": {                   # legacy, not read
         "SH": "000001",   # 上证综指
         "SZ": "399001",   # 深证成指
         "BJ": "899050",   # 北证50
@@ -93,17 +93,17 @@ DEFAULT_CONFIG = {
     "memory_log_path": str(MEMORY_LOG_PATH),
     "memory_log_max_entries": 50,        # 记忆日志最大条目数
 
-    # --- 路径 ---
-    "project_dir": str(PROJECT_DIR),
+    # --- 路径 --- (M4: project_dir/export_dir/data_cache_dir/checkpoint_dir/opinion_cache_dir 均为 legacy, not read — 实际路径用模块级常量)
+    "project_dir": str(PROJECT_DIR),      # legacy, not read
     "results_dir": str(RESULTS_DIR),
-    "export_dir": str(RESULTS_DIR),
-    "data_cache_dir": str(DATA_CACHE_DIR),
-    "checkpoint_dir": str(CHECKPOINT_DIR),
-    "opinion_cache_dir": str(OPINION_CACHE_DIR),
+    "export_dir": str(RESULTS_DIR),       # legacy, not read
+    "data_cache_dir": str(DATA_CACHE_DIR),  # legacy, not read
+    "checkpoint_dir": str(CHECKPOINT_DIR),  # legacy, not read
+    "opinion_cache_dir": str(OPINION_CACHE_DIR),  # legacy, not read
 
     # --- 调试 ---
     "debug": False,
-    "checkpoint_enabled": False,
+    "checkpoint_enabled": False,          # legacy, not read
 }
 
 # ============================================================

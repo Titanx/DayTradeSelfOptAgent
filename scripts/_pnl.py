@@ -3,7 +3,6 @@ import json,re
 from pathlib import Path
 
 RR = Path(__file__).parent.parent / "data" / "results"
-TOTAL=1_000_000
 
 # (code, name, d1_open, d2_high, d2_low, d2_close)
 ROUNDS={

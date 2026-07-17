@@ -37,7 +37,7 @@ for f in RESULTS_DIR.glob("*_analysis.cache.json"):
         d = json.loads(f.read_text(encoding="utf-8"))
         if d.get("trade_date"):
             existing_dates.add(d["trade_date"])
-    except:
+    except Exception:
         pass
 
 target_dates = []
@@ -65,7 +65,7 @@ for trade_date in target_dates:
     print(f"\n📦 预加载 {trade_date} 公共缓存...")
     try:
         CACHE.preload(symbols=["300750"])
-    except:
+    except Exception:
         pass
 
     for sid, name, sector in STOCKS:

@@ -15,6 +15,12 @@ PROJECT_DIR = Path(__file__).parent.parent
 sys.path.insert(0, str(PROJECT_DIR))
 RESULTS_DIR = PROJECT_DIR / "data" / "results"
 
+# H8 修复：止盈止损参数读 config，避免硬编码（参考 batch_backtest.py 的 H2 修复）
+from config.default_config import get_config as _get_cfg
+_swing_cfg = _get_cfg().get("one_day_swing", {})
+TARGET_GAIN_PCT = _swing_cfg.get("target_gain_pct", 1.0)   # 止盈线 +1%
+STOP_LOSS_PCT = _swing_cfg.get("stop_loss_pct", 3.0)        # 止损线 -3%
+
 STOCKS = [
     ("600438","通威股份","光伏"),("601012","隆基绿能","光伏"),("300274","阳光电源","光伏"),
     ("688599","天合光能","光伏"),("300751","迈为股份","光伏"),
@@ -49,7 +55,7 @@ def get_kline_data(code):
             if k[0]==D1_DATE: d1o=float(k[1])
             if k[0]==D2_DATE: d2h=float(k[3]); d2l=float(k[4]); d2c=float(k[2])
         return d0c,d1o,d2h,d2l,d2c
-    except:
+    except Exception:
         return None,None,None,None,None
 
 
@@ -78,8 +84,9 @@ for code,name,sector in STOCKS:
     if pred is None or d0c is None:
         nodata+=1; continue
     is_bull = pred["rating"].lower() in ("buy","overweight")
-    hit_p = d1o*1.01; stop_p = d1o*0.97
-    step_trigger = (d2h/d0c-1)*100 >= 1.0
+    # H8 修复：止盈止损参数读 config；STEP 基准改用 d1o（买入价）与 collector.py 对齐
+    hit_p = d1o*(1+TARGET_GAIN_PCT/100.0); stop_p = d1o*(1-STOP_LOSS_PCT/100.0)
+    step_trigger = (d2h/d1o-1)*100 >= TARGET_GAIN_PCT
     close_profit = (d2c/d1o-1)*100
 
     if is_bull and d2h >= hit_p:

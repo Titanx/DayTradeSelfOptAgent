@@ -6,6 +6,7 @@
 """
 
 import os
+import re
 import json
 import logging
 from pathlib import Path
@@ -439,16 +440,19 @@ class AStockTradingGraph:
 
         # 解析仓位建议（从决策文本）
         # C1: 支持 Markdown 格式（**Position**: 20%）和 JSON 回退格式（"position": 15）
-        # 单位识别：>1 视为百分数（如 20 → 0.2），≤1 视为比例（如 0.2 → 0.2）
+        # H1: 单位识别改用 % 符号判断，而非 val > 1.0（后者会误判 1% 为 100%）
         position_pct = None
         try:
             # 路径1: Markdown 格式（结构化输出成功时 render_portfolio_decision 生成）
-            pos_match = re.search(r'\*\*Position\*\*:\s*([\d.]+)%?', decision_text)
+            # 用 % 符号判断单位：有 % 是百分数（如 20% → 0.2），无 % 是比例（如 0.2 → 0.2）
+            pos_match = re.search(r'\*\*Position\*\*:\s*([\d.]+)(%)?', decision_text)
             if pos_match:
                 val = float(pos_match.group(1))
-                position_pct = val / 100.0 if val > 1.0 else val
+                has_pct = pos_match.group(2) == "%"
+                position_pct = val / 100.0 if has_pct else val
             else:
                 # 路径2: JSON 格式（结构化输出失败回退到自由文本时 LLM 可能输出 JSON）
+                # JSON 中的 position 值无法通过 % 符号判断，用 >1.0 启发式（JSON 通常输出百分数）
                 json_match = re.search(r'"position(?:_pct)?":\s*([\d.]+)', decision_text)
                 if json_match:
                     val = float(json_match.group(1))
@@ -547,6 +551,7 @@ class AStockTradingGraph:
 
                 if cache_items:
                     # 缓存命中：直接构建 price_map（字段顺序 open, close, high, low）
+                    # H4: 加 OHLC 完整性校验，避免 open=0 导致 hit_price=0 虚假 HIT
                     for item in cache_items:
                         d = item.get("date", "")
                         if not d:
@@ -556,6 +561,9 @@ class AStockTradingGraph:
                             c = float(item.get("close", 0) or 0)
                             h = float(item.get("high", 0) or 0)
                             l = float(item.get("low", 0) or 0)
+                            if not (o > 0 and c > 0 and h > 0 and l > 0):
+                                logger.warning(f"[_settle_pending_returns] 跳过 {symbol} {d} 残缺 OHLC (缓存): o={o} c={c} h={h} l={l}")
+                                continue
                             price_map[str(d)[:10]] = (o, c, h, l)
                         except (TypeError, ValueError):
                             continue
@@ -611,7 +619,6 @@ class AStockTradingGraph:
                 stop_price = d1_open * (1 - stop_loss_pct / 100.0)
 
                 # 提取评级信息
-                import re
                 rating_match = re.search(r'\*\*Rating\*\*:\s*(\w+)', entry_text)
                 rating = rating_match.group(1) if rating_match else "?"
 
@@ -661,7 +668,6 @@ class AStockTradingGraph:
 
     def _parse_decision(self, text: str) -> Tuple[str, str, float]:
         """解析决策文本中的评级和信心度，支持 Markdown 和 JSON 两种格式"""
-        import re
         import json as _json
 
         rating = "Hold"

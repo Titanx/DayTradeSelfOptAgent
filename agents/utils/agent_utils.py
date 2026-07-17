@@ -12,6 +12,8 @@ from datetime import datetime, timedelta
 import pandas as pd
 
 from .md_utils import to_markdown
+# M1 修复：A股相关时间统一用北京时间（与 akshare_adapter.py H6 修复保持一致）
+from dataflows.akshare_adapter import _BJ_TIME
 
 logger = logging.getLogger(__name__)
 
@@ -41,7 +43,7 @@ def get_stock_price_data(symbol: str, days: int = 60) -> str:
     from config.default_config import get_config
 
     config = get_config()
-    end_date = datetime.now()
+    end_date = datetime.now(_BJ_TIME)
     start_date = end_date - timedelta(days=max(days, 30))
 
     df = route_to_vendor(
@@ -394,6 +396,10 @@ def get_opinion_report(symbol: str, stock_name: str = "") -> str:
         symbol: A股代码
         stock_name: 股票名称（可选）
     """
+    # H7 修复：尊重 enable_opinion_monitor 配置项（main.py --no-opinion 会置为 False）
+    from config.default_config import get_config
+    if not get_config().get("enable_opinion_monitor", True):
+        return None  # 舆情监控已禁用
     # ———— 缓存优先 ————
     try:
         from dataflows.market_cache import MarketDataCache
@@ -764,14 +770,16 @@ def get_global_macro_data() -> str:
     - 美元/离岸人民币 (USDCNH)
     - 原油/铜期货
 
-    三级回退策略:
+    三级回退策略（M3 修正：实际为二级回退——主接口 + 降级标注）:
       1. AKShare 主接口（新浪/东方财富等）
-      2. AKShare 备用接口（不同源）
-      3. 降级标注（明确告知数据不可用，让分析师自行评估）
+      2. 降级标注（明确告知数据不可用，让分析师自行评估）
+
+    注: 大多数指标仅有 1 个数据源（AKShare），无备用接口；
+    数据不可用时以降级标注形式返回，不构成独立的"第三级"。
     """
     lines = []
     lines.append("# 全球宏观数据")
-    lines.append(f"生成时间: {datetime.now().strftime('%Y-%m-%d %H:%M')} (北京时间)")
+    lines.append(f"生成时间: {datetime.now(_BJ_TIME).strftime('%Y-%m-%d %H:%M')} (北京时间)")
     lines.append("")
 
     # --- 缓存键 ---
@@ -790,7 +798,7 @@ def get_global_macro_data() -> str:
             trade_date = get_latest_trade_date()
         except Exception as e:
             logger.debug(f"get_latest_trade_date 失败，回退到当前自然日期: {e}")
-            trade_date = datetime.now().strftime("%Y-%m-%d")
+            trade_date = datetime.now(_BJ_TIME).strftime("%Y-%m-%d")
 
     cache_key = f"global_macro_{trade_date}"
     try:

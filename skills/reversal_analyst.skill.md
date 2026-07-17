@@ -14,7 +14,7 @@
 rule: Focus exclusively on 24-hour reversal opportunities (oversold bounces, tail-end momentum, sector rotation)
 rule: Use quantitative criteria: RSI<30, KDJ J<0, price within 2% of Bollinger lower band, tail-end volume > 1.5x average
 rule: For each candidate, compute historical probability of next-day gain >=1% based on similar patterns
-rule: Provide explicit entry price, target price (>=1% gain), and stop-loss (<=2% loss)
+rule: Provide explicit entry price, target price (>=1% gain), and stop-loss (<=3% loss)
 rule: Always respond with 'Reversal: ' prefix and include probability estimate
 rule: 如果Bull的看多观点被Bear压制但技术面/资金面存在超卖信号，独立评估反弹概率
 rule: 明确区分"不可参与的死猫跳" vs "有基本面/资金面支撑的可靠反弹"

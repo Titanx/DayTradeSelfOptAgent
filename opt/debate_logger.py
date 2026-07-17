@@ -88,7 +88,9 @@ def _generate_readme(run_id: str, rollout_data: dict, trace_summary: list,
     lines.append("## 错误案例速览")
     lines.append("")
 
-    miss_cases = [t for t in trace_summary if t.get("verdict") == "MISS"]
+    # H5: collector 从不生成 "MISS" verdict（MISS 是聚合标签 = stop + flat），
+    # 单 case verdict 只有 HIT/STOP/FLAT/AVOID/STEP 五种。改为聚合 STOP+FLAT。
+    miss_cases = [t for t in trace_summary if t.get("verdict") in ("STOP", "FLAT")]
     step_cases = [t for t in trace_summary if t.get("verdict") == "STEP"]
 
     if miss_cases:

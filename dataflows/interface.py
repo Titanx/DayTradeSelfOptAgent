@@ -1,7 +1,7 @@
 """
 统一数据接口层
 
-路由数据请求到对应的 vendor（akshare / tushare），
+路由数据请求到对应的 vendor（当前仅 akshare 实现），
 提供统一的函数签名，Agent 工具函数通过此层获取数据。
 
 借鉴 TradingAgents 的 VENDOR_METHODS 注册模式。
@@ -80,7 +80,7 @@ def get_category_for_method(method: str) -> Optional[str]:
 def get_vendors_for_method(method: str, config: dict) -> List[str]:
     """获取方法的 vendor 优先级列表"""
     data_vendor = config.get("data_vendor", "akshare")
-    # 支持逗号分隔的 fallback 链，如 "akshare,tushare"
+    # 支持逗号分隔的 fallback 链（当前仅 akshare 实现）
     vendors = [v.strip() for v in data_vendor.split(",")]
     # 确保方法支持的 vendor
     available = [v for v in vendors if v in VENDOR_METHODS.get(method, {})]

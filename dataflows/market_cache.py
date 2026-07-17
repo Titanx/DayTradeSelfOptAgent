@@ -283,23 +283,26 @@ class MarketDataCache:
     def get_history(self, method: str, days: int = 30) -> List[Dict]:
         """获取指定方法的多日历史（按日期升序）"""
         results = []
-        for key, value in self._memory.items():
-            if method in key:
-                try:
-                    date_str = key.split("_")[0]
-                    results.append({"date": date_str, "data": value})
-                except Exception:
-                    pass
+        # M2: 遍历 _memory 需持锁，避免并发写时迭代器失效
+        with self._lock:
+            for key, value in self._memory.items():
+                if method in key:
+                    try:
+                        date_str = key.split("_")[0]
+                        results.append({"date": date_str, "data": value})
+                    except Exception:
+                        pass
         results.sort(key=lambda x: x["date"])
         return results[-days:] if len(results) > days else results
 
     def list_cached_dates(self, method: str) -> List[str]:
         """列出某方法所有已缓存的日期（内存+磁盘）"""
         dates = set()
-        # 内存
-        for key in self._memory:
-            if method in key:
-                dates.add(key.split("_")[0])
+        # 内存（M2: 遍历 _memory 需持锁）
+        with self._lock:
+            for key in self._memory:
+                if method in key:
+                    dates.add(key.split("_")[0])
         # 磁盘
         for f in self.cache_dir.glob(f"*_{method}.md"):
             dates.add(f.name.split("_")[0])
@@ -632,7 +635,9 @@ class MarketDataCache:
         return len(list(self.cache_dir.glob(f"*_{method}.md")))
 
     def _count_memory(self, method: str) -> int:
-        return sum(1 for k in self._memory if method in k)
+        # M2: 遍历 _memory 需持锁
+        with self._lock:
+            return sum(1 for k in self._memory if method in k)
 
     # ================================================================
     # 内部: 历史回填（一次拉多天，按日分文件保存）
@@ -770,29 +775,33 @@ class MarketDataCache:
         """
         items: List[Dict] = []
         prefix = f"price_daily_{symbol}_"
-        # 1) 内存命中
-        for k, v in self._stock_memory.items():
-            if k.startswith(prefix) and isinstance(v, dict):
-                items.append(v)
-        # 2) 内存不足，尝试从磁盘补读
-        if not items:
-            sdir = self.stock_cache_dir / symbol
-            if sdir.exists():
-                for f in sorted(sdir.glob("price_daily_*.md")):
-                    try:
-                        date_str = f.stem.replace("price_daily_", "")
-                        key = f"price_daily_{symbol}_{date_str}"
+        # 1) 内存命中（M2: 遍历 _stock_memory 需持锁，避免并发写时迭代器失效）
+        with self._lock:
+            for k, v in self._stock_memory.items():
+                if k.startswith(prefix) and isinstance(v, dict):
+                    items.append(v)
+        # 2) H6: 始终合并磁盘数据（原条件 `if not items` 仅在内存完全空时扫磁盘，
+        # 导致内存有 5 天但磁盘有 30 天时返回不完整数据，Day1/Day2 可能缺失）
+        sdir = self.stock_cache_dir / symbol
+        if sdir.exists():
+            for f in sorted(sdir.glob("price_daily_*.md")):
+                try:
+                    date_str = f.stem.replace("price_daily_", "")
+                    key = f"price_daily_{symbol}_{date_str}"
+                    # M2: 内存检查+写入需持锁，避免与并发回填竞态
+                    with self._lock:
                         if key in self._stock_memory:
-                            items.append(self._stock_memory[key])
+                            # 内存已有，跳过（去重逻辑会处理）
                             continue
-                        json_path = f.with_suffix(".cache.json")
-                        if json_path.exists():
-                            data = json.loads(json_path.read_text(encoding="utf-8"))
-                            if data is not None:
+                    json_path = f.with_suffix(".cache.json")
+                    if json_path.exists():
+                        data = json.loads(json_path.read_text(encoding="utf-8"))
+                        if data is not None:
+                            with self._lock:
                                 self._stock_memory[key] = data
-                                items.append(data)
-                    except Exception:
-                        pass
+                            items.append(data)
+                except Exception:
+                    pass
         if not items:
             return []
         # 去重 + 按日期升序

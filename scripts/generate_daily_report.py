@@ -97,6 +97,7 @@ lines.append(
 lines.append("")
 lines.append("**Generated**: " + today.strftime("%Y-%m-%d %H:%M"))
 lines.append("**Strategy**: One-Day Swing (Day0 analyze -> Day1 buy -> Day2 force close)")
+# L: 模型名硬编码，理想情况应读 config.get("deep_think_llm")；此处为报告展示用，保持简单
 lines.append("**Model**: DeepSeek-V4  temperature=0.1")
 lines.append("**Target**: >=1% gain (net ~0.89% after 0.11% cost)")
 lines.append("")

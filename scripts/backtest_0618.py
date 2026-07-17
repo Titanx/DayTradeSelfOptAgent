@@ -110,7 +110,7 @@ for sid, name in STOCKS:
         continue
     try:
         klines = get_kline_data(sid)
-    except:
+    except Exception:
         continue
 
     d0_close = d1_close = None

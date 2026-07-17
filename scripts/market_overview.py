@@ -29,6 +29,8 @@ logging.basicConfig(level=logging.WARNING)
 
 from dataflows.market_cache import MarketDataCache
 from dataflows.interface import route_to_vendor
+# L: 时间戳统一用北京时间（与 akshare_adapter H6 修复保持一致）
+from dataflows.akshare_adapter import _BJ_TIME
 
 CACHE_DIR = project_dir / "data" / "overview_cache"
 
@@ -63,7 +65,7 @@ def fetch_market_overview(trade_date: str) -> dict:
     cache = MarketDataCache.get_instance()
     cache.set_trade_date(trade_date)
 
-    overview = {"trade_date": trade_date, "generated_at": datetime.now().isoformat()}
+    overview = {"trade_date": trade_date, "generated_at": datetime.now(_BJ_TIME).isoformat()}
 
     # 1. 市场情绪 (涨跌家数, 涨跌停)
     sentiment = cache.fetch("get_market_sentiment")

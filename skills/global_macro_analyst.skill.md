@@ -31,6 +31,8 @@ rule: 美股跌-1%以上 + VIX>20 → 看空A股次日，输出 "Global: Bearish
 rule: 美股大跌-2%以上 + VIX>25 + 人民币贬值 → 强烈看空，输出 "Global: Bearish (Strong)，建议PM今日最多1个Buy且仓位≤10%"
 rule: 恒指/A50走势与美股背离时，以A50为优先参考（它直接映射A股）
 rule: 原油大涨+3%以上时，光伏/风电板块次日偏强（替代能源逻辑）；原油大跌时新能源板块承压
+<!-- M6: 以下仓位建议为宏观环境提示，最终仓位以 portfolio_manager 的 20% 单票上限为准（config: max_position_pct） -->
+note: 上方仓位建议（如"≤10%"）是基于宏观风险环境的保守提示；实际仓位上限由 portfolio_manager 统一裁定，默认单票 20%。
 
 ## anti_patterns
 <!-- SKILLOPT-EDITABLE -->

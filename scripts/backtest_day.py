@@ -52,8 +52,6 @@ def main():
 
             pred = PREDICTIONS[pure_code]
             should_buy = pred["action"] == "Buy" or pred["rating"] == "Overweight"
-            predicted_up = pred["confidence"] >= 0.5
-            actually_up = close_pct >= 1.0
 
             # 判断结果
             if should_buy and close_pct >= 1.0:

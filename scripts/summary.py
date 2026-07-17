@@ -15,8 +15,6 @@ for f in files:
     stock_name = d.get("stock_name", "")
     conf = d["confidence"]
     sector = "未知"
-    for line in by_rating.setdefault(rating, []):
-        pass
     by_rating.setdefault(rating, []).append(f"{s} {stock_name}")
     print(f"{s} {stock_name:6s}  {rating:12s}  {conf:.0%}")
 

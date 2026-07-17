@@ -38,8 +38,10 @@ except Exception:
 print(f"📡 {len(sector_names)} 个行业板块, 回填近30天")
 
 # ── 2. 逐板块拉取 ──
-start_date = (pd.Timestamp.now() - pd.Timedelta(days=35)).strftime("%Y%m%d")
-end_date = pd.Timestamp.now().strftime("%Y%m%d")
+# M-scripts-3 (round-9): 用 Asia/Shanghai 时区，与同文件 TODAY=get_latest_trade_date()（基于 _BJ_TIME）一致
+_start_ts = pd.Timestamp.now(tz="Asia/Shanghai")
+start_date = (_start_ts - pd.Timedelta(days=35)).strftime("%Y%m%d")
+end_date = _start_ts.strftime("%Y%m%d")
 
 per_sector = {}       # sector_name → DataFrame
 success = 0

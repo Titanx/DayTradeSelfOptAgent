@@ -351,8 +351,7 @@ def main():
     # 自动应用编辑可能破坏这种优势 → 仅收集数据，跳过 apply
     ACCURACY_THRESHOLD = 70.0
     current_accuracy = rollout_data.get("group_summary", {}).get("overall", {}).get("accuracy", 0)
-    history = _load_accuracy_history()
-    converge_status, converge_reason = detect_convergence(history)
+    # (round-9, L-opt-1): 删除死代码 — history/converge_status/converge_reason 在 Step 5 (line 401-402) 重新计算，此处从未使用
 
     if current_accuracy >= ACCURACY_THRESHOLD and not args.force_apply:
         print("\n" + "=" * 60)

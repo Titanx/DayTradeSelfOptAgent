@@ -457,7 +457,8 @@ def main():
             pos = result.get("position_pct")
             with print_lock:
                 elapsed = time.time() - start_time
-                eta = (elapsed / max(idx, 1)) * (total - idx) if idx > 0 else 0
+                # (round-9, L-scripts-6): ETA 需除以 workers（并发执行），否则高估
+                eta = (elapsed / max(idx, 1)) * (total - idx) / max(args.workers, 1) if idx > 0 else 0
                 pos_str = f" pos={pos:.0%}" if pos else ""
                 print(f"[{idx:2d}/{total}] {code} {name} ({sector}) → {rating} ({conf:.0%}){pos_str} ⏱{dt:.0f}s | ETA {eta/60:.0f}min")
             return {"code": code, "name": name, "sector": sector,

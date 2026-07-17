@@ -81,7 +81,9 @@ records=[]
 for code,name,sector in STOCKS:
     pred=load_prediction(code)
     d0c,d1o,d2h,d2l,d2c=get_kline_data(code)
-    if pred is None or d0c is None:
+    # H-scripts-1 (round-9): 补 d1o/d2h/d2l/d2c 的 None 校验
+    # H8 改用 d1o 基准后，d1o=None 会抛 TypeError，需从静默跳过保护
+    if pred is None or d0c is None or d1o is None or d2h is None or d2l is None or d2c is None:
         nodata+=1; continue
     is_bull = pred["rating"].lower() in ("buy","overweight")
     # H8 修复：止盈止损参数读 config；STEP 基准改用 d1o（买入价）与 collector.py 对齐

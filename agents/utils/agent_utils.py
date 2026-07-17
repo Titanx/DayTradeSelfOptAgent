@@ -6,6 +6,8 @@ Agent 工具函数
 """
 
 import logging
+import re
+# (round-9, L-core-6): 统一在顶部 import re，供 check_liquidity_risk / hard_filter_stock 使用
 from typing import Dict, List, Any, Optional
 from datetime import datetime, timedelta
 
@@ -397,9 +399,11 @@ def get_opinion_report(symbol: str, stock_name: str = "") -> str:
         stock_name: 股票名称（可选）
     """
     # H7 修复：尊重 enable_opinion_monitor 配置项（main.py --no-opinion 会置为 False）
+    # H-core-1 (round-9): 返回明确禁用提示字符串，避免 ToolNode 将 None 转为 "None" 字符串
+    # 导致 LLM 误判舆情监控仍可用并反复调用
     from config.default_config import get_config
     if not get_config().get("enable_opinion_monitor", True):
-        return None  # 舆情监控已禁用
+        return "舆情监控已禁用（配置 enable_opinion_monitor=False），跳过舆论数据采集。"
     # ———— 缓存优先 ————
     try:
         from dataflows.market_cache import MarketDataCache
@@ -554,7 +558,7 @@ def check_liquidity_risk(symbol: str, stock_name: str = "") -> str:
         lines.append(f"> ⚠️ 保守建议: 回避该股，流动性不可知是最坏情况")
         return "\n".join(lines)
 
-    import re
+    # (round-9, L-core-6): 删除局部 import re，改用顶部统一 import
 
     # 1. ST 检查 — 通过股票名称中的 *ST/ST 标记检测（比代码前缀更可靠）
     name_lower = stock_name.lower() if stock_name else ""
@@ -694,7 +698,9 @@ def hard_filter_stock(symbol: str, config: dict = None) -> tuple:
     # a. ST 检测 — 结构化 name 字段
     if ban_st:
         name = str(data.get("name", "") or "")
-        if "ST" in name or "*ST" in name:
+        # (round-9, L-core-2): 与 check_liquidity_risk 统一用 re.search 词边界匹配，
+        # 避免误匹配 "BEST"/"POST" 等含 ST 子串的单词
+        if re.search(r'(\*ST|\bST\b)', name):
             return (False, f"ST股票: {name}")
 
     # b. 停牌 — volume == 0（无 volume 字段时用 amount_wan == 0 作为代理）
@@ -937,7 +943,9 @@ def _detect_us_session() -> dict:
         us_minute = us_now.minute
     except Exception:
         # 回退到月份近似（zoneinfo 不可用时）
-        now_bj = datetime.now()
+        # (round-9, M-core-1): 用 _BJ_TIME 取北京时间，避免 UTC 服务器上
+        # datetime.now() 返回本地时间导致美东时间推算偏差 8 小时
+        now_bj = datetime.now(_BJ_TIME)
         is_dst = 3 <= now_bj.month <= 11
         # 简化：假设美东时间 = 北京时间 -12（夏令时）或 -13（冬令时）
         offset_hours = 12 if is_dst else 13

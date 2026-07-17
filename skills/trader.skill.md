@@ -27,7 +27,7 @@ rule: 硬门槛：Day1 预期涨幅必须 ≥1% 才算正期望 (成本 0.11%)
 
 rule: 预期 Day1 涨幅 < 1% → Hold
 rule: 股票近 5 日连续大涨 → Hold (追高风险)
-rule: 近期日成交额 < 5000 万元 → Hold (流动性太差)
+rule: 近期日成交额 < 1 亿元 → Hold (流动性太差，与 bear/conservative/bull 阈值对齐)
 rule: 隔夜有重大不确定性（财报发布日、政策窗口期） → Hold
 rule: 趋势不明朗，涨跌概率接近 50:50 → Hold
 

@@ -9,7 +9,7 @@
 
 rule: Day 0 盘后分析 → Day 1 开盘买入：如果决策是 Buy/Overweight
 rule: Day 2 收盘前强制平仓：持有仅 1 个交易日
-rule: 不做空：只有 Buy 和 Hold 两种实际选择
+rule: 不做空：实际操作只有 Day1 买入（Buy/Overweight）或不参与（Hold/Underweight/Sell）两类结果
 rule: 单票仓位 ≤ 20%：风险分散
 rule: 止盈线 +1% / 止损线 -3%（Day2 日内触及即强制平仓，不可越过）
 

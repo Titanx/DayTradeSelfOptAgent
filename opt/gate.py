@@ -110,7 +110,7 @@ def evaluate_current_accuracy(results_dir: Path, val_dates: list) -> Optional[di
     如果没有，需要先跑 run_batch_date.py 对应日期。
     """
     # 简单版本：直接读 results/ 目录中验证集日期的回测结果
-    hit = avoid = miss = step = 0
+    # (round-9, L-opt-2): 删除死变量 hit/avoid/miss/step（从未使用），保留 found
     found = 0
 
     for date_str in val_dates:

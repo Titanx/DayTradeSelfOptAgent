@@ -12,6 +12,10 @@ RESULTS_DIR = PROJECT_DIR / "data" / "results"
 REPORTS_DIR = PROJECT_DIR / "daily_reports"
 
 from scripts.stock_universe import stocks_for_collector
+# M-scripts-1 (round-9): 报告时间戳用北京时间，避免非北京时间服务器上文件名/Generated 偏移
+from dataflows.akshare_adapter import _BJ_TIME
+# (round-9, L-scripts-4): 引入 get_config 以读取模型名，避免硬编码
+from config.default_config import get_config
 STOCKS = stocks_for_collector()
 
 RATING_EMOJI = {"Overweight": "OW", "Buy": "BUY", "Hold": "HOLD", "Underweight": "UW", "Sell": "SELL"}
@@ -58,7 +62,8 @@ def pct_str(v):
 
 
 # ---- discover dates ----
-today = datetime.now()
+# M-scripts-1 (round-9): 用 _BJ_TIME 保证报告文件名与 Generated 时间戳在非北京时间服务器上也正确
+today = datetime.now(_BJ_TIME)
 today_str = today.strftime("%Y-%m-%d")
 
 all_dates = set()
@@ -97,8 +102,9 @@ lines.append(
 lines.append("")
 lines.append("**Generated**: " + today.strftime("%Y-%m-%d %H:%M"))
 lines.append("**Strategy**: One-Day Swing (Day0 analyze -> Day1 buy -> Day2 force close)")
-# L: 模型名硬编码，理想情况应读 config.get("deep_think_llm")；此处为报告展示用，保持简单
-lines.append("**Model**: DeepSeek-V4  temperature=0.1")
+# (round-9, L-scripts-4): 模型名从 config 读取，避免硬编码 DeepSeek-V4
+_d_cfg = get_config()
+lines.append("**Model**: " + str(_d_cfg.get("deep_think_llm", "?")) + "  temperature=" + str(_d_cfg.get("temperature", "?")))
 lines.append("**Target**: >=1% gain (net ~0.89% after 0.11% cost)")
 lines.append("")
 

@@ -197,7 +197,8 @@ def render_portfolio_decision(decision: PortfolioDecision) -> str:
         f"**Confidence**: {decision.confidence:.0%}",
     ]
     if decision.position_pct is not None:
-        lines.append(f"**Position**: {decision.position_pct:.0%}")
+        # (round-9, L-core-3): :.0% 把 0.155→"16%" 解析回 0.16 丢失精度，改 :.1%
+        lines.append(f"**Position**: {decision.position_pct:.1%}")
     lines.append(f"\n**Executive Summary**: {decision.executive_summary}")
     lines.append(f"\n**Investment Thesis**: {decision.investment_thesis}")
     if decision.key_risks:

@@ -18,6 +18,8 @@ rule: 每次发言以 "Neutral: " 开头
 rule: 综合激进和保守两方的观点，找出平衡点
 rule: 给出概率加权的风险评估
 rule: 指出最可能的情景（而非最乐观/最悲观）
+rule: 硬门槛: Day1 预期涨幅必须 ≥1% 才算正期望 (成本 0.11%)
 
 ## output
 最终给出 Buy/Overweight/Hold/Underweight/Sell 评级。
+输出结构化风险评估：评级 (Buy/Overweight/Hold/Underweight/Sell) + 信心度 (0.0-1.0) + 主要风险因素列表。

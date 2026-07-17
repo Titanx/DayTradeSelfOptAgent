@@ -159,12 +159,14 @@ class TradingMemoryLog:
                     # 替换 pending 为实际数据
                     prefix = entry.split("\n")[0]
                     new_prefix = prefix.replace("pending", "resolved")
-                    entry = entry.replace(prefix, new_prefix)
+                    # (round-9, L-core-10): 仅替换首处 prefix，避免多匹配误改
+                    entry = entry.replace(prefix, new_prefix, 1)
                     entry += f"\n\nREFLECTION:\n{reflection}\n"
                     found = True
                     break
 
-            updated.append(entry if not found else entry)
+            # (round-9, L-core-1): 两个分支都 append entry，三元冗余 → 简化
+            updated.append(entry)
 
         # 原子写入（临时文件 + 替换）
         tmp_path = self.log_path.with_suffix(".tmp")
@@ -191,9 +193,17 @@ class TradingMemoryLog:
             return
 
         # 保留最新的 max_entries 条已结算
-        resolved = resolved[-self.max_entries:]
+        resolved_keep = resolved[-self.max_entries:]
+        resolved_keep_set = set(resolved_keep)
 
-        all_entries = pending + resolved
+        # (round-9, M-core-3): 保持原始时间顺序合并，避免重排
+        # 原实现 pending + resolved 会把 pending 前置、resolved 后置，
+        # 而 get_past_context 用 same_entries[-max_same:] 取最新条目，
+        # 导致最新 pending 决策在 resolved 数量 >= max_same 时被排除出上下文。
+        all_entries = [
+            e for e in entries
+            if (e in resolved_keep_set) or ("pending" in e[:200])
+        ]
         tmp_path = self.log_path.with_suffix(".tmp")
         tmp_path.write_text(ENTRY_SEPARATOR.join(all_entries), encoding="utf-8")
         tmp_path.replace(self.log_path)

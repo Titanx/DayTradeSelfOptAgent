@@ -25,7 +25,14 @@ def to_markdown(data: Any, title: str = "") -> str:
     lines = []
     if title:
         lines.append(f"# {title}")
-        lines.append(f"\n> 生成时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        # (round-9, M-core-2): 用北京时间戳，避免 UTC 服务器上生成时间慢 8 小时
+        # 延迟导入避免循环依赖（agent_utils 在顶部 import md_utils）
+        try:
+            from dataflows.akshare_adapter import _BJ_TIME
+            now_str = datetime.now(_BJ_TIME).strftime('%Y-%m-%d %H:%M:%S')
+        except Exception:
+            now_str = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        lines.append(f"\n> 生成时间: {now_str}")
         lines.append("")
 
     lines.append(_render_value(data, level=1))

@@ -64,6 +64,8 @@ DEFAULT_CONFIG = {
     # --- 交易参数 ---
     "initial_capital": 100000,           # 初始资金
     "max_position_pct": 0.2,             # 单只股票最大仓位 (与 README 一致: 20%)
+    # (round-9, L-core-7): LangGraph recursion_limit，默认 120 (4 分析师工具循环 + 辩论 + 风险辩论 + PM)
+    "recursion_limit": 120,
 
     # --- 一日游策略参数 (One-Day Swing) ---
     "strategy_mode": "one_day_swing",    # 策略模式: one_day_swing (默认)
@@ -75,7 +77,7 @@ DEFAULT_CONFIG = {
         "min_daily_amount_yuan": 1e8,    # 最小日成交额: 1 亿元 (流动性门槛)
         "max_recent_gain_pct": 15,       # 近 5 日最大涨幅: 15% (追高过滤)
         "ban_st_stocks": True,           # 禁止 ST 股票
-        "max_position_pct": 0.2,         # 单票仓位上限 (与 README 一致: 20%)
+        # (round-9, L-core-8): max_position_pct 见顶层（去重，原重复定义在此）
     },
 
     # --- 基准指数 --- (M4: 以下两项 legacy, not read — 实际基准在 akshare_adapter 中硬编码)

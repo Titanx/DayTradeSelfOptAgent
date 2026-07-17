@@ -114,8 +114,8 @@ def _score_file_priority(edit: dict) -> float:
     return FILE_PRIORITY.get(file_name, 5)
 
 
-def score_edit(edit: dict, rollout: dict) -> float:
-    """对单条编辑进行综合评分。"""
+def score_edit(edit: dict, rollout: dict) -> dict:
+    """对单条编辑进行综合评分，返回各维度评分字典。"""
     scores = {
         "error_backing": _score_error_backing(edit, rollout),
         "specificity": _score_specificity(edit),

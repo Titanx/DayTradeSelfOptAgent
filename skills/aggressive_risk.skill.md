@@ -24,3 +24,4 @@ rule: 回应保守派的流动性担忧
 ## output
 最终给出 Buy/Overweight/Hold/Underweight/Sell 评级。
 Buy/Overweight 意味着你认为 Day1 买入有正收益期望。
+输出结构化风险评估：评级 (Buy/Overweight/Hold/Underweight/Sell) + 信心度 (0.0-1.0) + 主要风险因素列表。

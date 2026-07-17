@@ -1,10 +1,19 @@
 """多日回测: 针对每个有分析缓存的交易日,拉取下一个交易日实盘数据做回测"""
-import json, urllib.request
+import json, urllib.request, sys
 from datetime import datetime
 from pathlib import Path
 from collections import defaultdict
 
-RESULTS_DIR = Path(__file__).parent.parent / "data" / "results"
+PROJECT_DIR = Path(__file__).parent.parent
+sys.path.insert(0, str(PROJECT_DIR))
+RESULTS_DIR = PROJECT_DIR / "data" / "results"
+
+# M-scripts-2 (round-9): 用 _BJ_TIME 判定"当天"，避免非北京时间服务器与缓存 trade_date 错位
+from dataflows.akshare_adapter import _BJ_TIME
+# M-scripts-4 (round-9): STEP 基准统一为 d1o（买入价），与 collector.py / batch_backtest.py 对齐
+from config.default_config import get_config as _get_cfg
+_swing_cfg = _get_cfg().get("one_day_swing", {})
+TARGET_GAIN_PCT = _swing_cfg.get("target_gain_pct", 1.0)   # 止盈线 +1%
 
 STOCKS = [
     ("sz300750", "宁德时代"),
@@ -54,7 +63,8 @@ def main():
 
     day_results = defaultdict(lambda: {"hit": 0, "avoid": 0, "miss": 0, "step": 0})
 
-    today_str = datetime.now().strftime("%Y-%m-%d")
+    # M-scripts-2 (round-9): 用 _BJ_TIME 判定"当天"，跳过当天无次日数据的逻辑才不会错位
+    today_str = datetime.now(_BJ_TIME).strftime("%Y-%m-%d")
 
     for trade_date in dates:
         # 跳过当天(没下一天数据)
@@ -104,6 +114,10 @@ def main():
             if d1_close is None:
                 print(f"  {pure_code} {name}: {trade_date} 无次日数据(可能周末)")
                 continue
+            # M-scripts-4 (round-9): 补 d1_open/d1_high 的 None 校验，避免 d1o 基准计算抛 TypeError
+            if d1_open is None or d1_high is None:
+                print(f"  {pure_code} {name}: {trade_date} 次日开/高缺失")
+                continue
 
             rating = pred.get("rating", "?")
             confidence = pred.get("confidence", 0)
@@ -114,12 +128,15 @@ def main():
 
             should_buy = rating in ("Buy", "Overweight")
             actually_up = close_pct >= 1.0
+            # M-scripts-4 (round-9): STEP 基准改用 d1_open（买入价）→ d1_high（日内最高），
+            # 与 collector.py / batch_backtest.py 的 d1o 基准对齐；HIT/MISS 维持原 d0_close 基准以最小改动
+            step_trig = (d1_high / d1_open - 1) * 100 >= TARGET_GAIN_PCT
 
             if should_buy and actually_up:
                 verdict = "HIT"
             elif should_buy:
                 verdict = "MISS"
-            elif actually_up:
+            elif step_trig:
                 verdict = "STEP"
             else:
                 verdict = "AVOID"

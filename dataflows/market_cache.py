@@ -11,6 +11,8 @@
   - TTL 由交易日决定：同一交易日的数据不变
 """
 
+# round-9: H-opt-1/H-opt-2/M-opt-3 fixes (RLock完整性 + 原子写入完整性 + per-symbol限制)
+
 import json
 import logging
 import os
@@ -32,11 +34,17 @@ def _to_jsonable(obj: Any) -> Any:
         import numpy as np
         import pandas as pd
         if isinstance(obj, pd.DataFrame):
-            return _to_jsonable(obj.replace({np.nan: None}).to_dict(orient="records"))
+            # (round-9, L-opt-3): 同时替换 np.nan 和 pd.NaT，避免 NaT 进入 JSON
+            return _to_jsonable(obj.replace({np.nan: None, pd.NaT: None}).to_dict(orient="records"))
         if isinstance(obj, pd.Series):
-            return _to_jsonable(obj.replace({np.nan: None}).to_dict())
+            return _to_jsonable(obj.replace({np.nan: None, pd.NaT: None}).to_dict())
         if isinstance(obj, (np.integer,)):
             return int(obj)
+        # (round-9, L-opt-3): 补全 np.bool_ / np.datetime64 处理
+        if isinstance(obj, (np.bool_,)):
+            return bool(obj)
+        if isinstance(obj, (np.datetime64,)):
+            return str(obj)
         if isinstance(obj, (np.floating,)):
             if np.isnan(obj):
                 return None
@@ -159,9 +167,9 @@ class MarketDataCache:
             self._memory[key] = data
             json_path = self.cache_dir / f"{key}.cache.json"
             try:
-                json_path.write_text(
+                self._atomic_write_text(
+                    json_path,
                     json.dumps(_to_jsonable(data), ensure_ascii=False),
-                    encoding="utf-8",
                 )
             except Exception as e:
                 logger.warning(f"公共数据缓存写入失败 {key}: {e}")
@@ -351,16 +359,16 @@ class MarketDataCache:
 
             # MD 人类可读
             try:
-                filepath.write_text(to_markdown(data, f"{title} — {symbol} ({self._trade_date})"), encoding="utf-8")
+                self._atomic_write_text(filepath, to_markdown(data, f"{title} — {symbol} ({self._trade_date})"))
             except Exception as e:
                 logger.warning(f"舆情 MD 写入失败 {symbol} {method}: {e}")
 
             # JSON 跨会话恢复
             json_path = filepath.with_suffix(".cache.json")
             try:
-                json_path.write_text(
+                self._atomic_write_text(
+                    json_path,
                     json.dumps(_to_jsonable(data), ensure_ascii=False),
-                    encoding="utf-8",
                 )
                 logger.info(f"💾 [舆情缓存保存] {symbol} {method}")
             except Exception as e:
@@ -375,13 +383,15 @@ class MarketDataCache:
             try:
                 symbol = f.parent.name
                 method = f.stem.split("_", 1)[1] if "_" in f.stem else f.stem
-                date_str = self._trade_date
                 key = self._make_opinion_key(symbol, method)
-                if key in self._opinion_memory:
-                    continue
-                data = self._load_opinion_disk(symbol, method)
+                # H-opt-1: 锁内检查存在性，锁外做磁盘 IO，再加锁写入
+                with self._lock:
+                    if key in self._opinion_memory:
+                        continue
+                data = self._load_opinion_disk(symbol, method)  # 磁盘读不持锁
                 if data is not None:
-                    self._opinion_memory[key] = data
+                    with self._lock:
+                        self._opinion_memory[key] = data
                     count += 1
             except Exception:
                 pass
@@ -462,15 +472,15 @@ class MarketDataCache:
             title = METHOD_TITLES.get(method, method)
 
             try:
-                filepath.write_text(to_markdown(data, f"{title} — {symbol} ({self._trade_date})"), encoding="utf-8")
+                self._atomic_write_text(filepath, to_markdown(data, f"{title} — {symbol} ({self._trade_date})"))
             except Exception as e:
                 logger.warning(f"个股 MD 写入失败 {symbol} {method}: {e}")
 
             json_path = filepath.with_suffix(".cache.json")
             try:
-                json_path.write_text(
+                self._atomic_write_text(
+                    json_path,
                     json.dumps(_to_jsonable(data), ensure_ascii=False),
-                    encoding="utf-8",
                 )
                 logger.info(f"💾 [个股缓存保存] {symbol} {method}")
             except Exception as e:
@@ -490,11 +500,14 @@ class MarketDataCache:
                 if method not in self.STOCK_CACHE_METHODS:
                     continue
                 key = self._make_stock_key(symbol, method)
-                if key in self._stock_memory:
-                    continue
-                data = self._load_stock_disk(symbol, method)
+                # H-opt-1: 锁内检查存在性，锁外做磁盘 IO，再加锁写入
+                with self._lock:
+                    if key in self._stock_memory:
+                        continue
+                data = self._load_stock_disk(symbol, method)  # 磁盘读不持锁
                 if data is not None:
-                    self._stock_memory[key] = data
+                    with self._lock:
+                        self._stock_memory[key] = data
                     count += 1
             except Exception:
                 pass
@@ -563,6 +576,12 @@ class MarketDataCache:
     # 内部: 磁盘读写
     # ================================================================
 
+    def _atomic_write_text(self, path: Path, content: str):
+        """原子写入文本文件（tmp + replace），避免进程崩溃产生损坏文件"""
+        tmp = path.with_name(path.name + ".tmp")
+        tmp.write_text(content, encoding="utf-8")
+        tmp.replace(path)  # 原子操作（同文件系统下 os.replace）
+
     def _save_disk(self, method: str, date: str, data: Any):
         """写入 MD（人类可读）+ JSON（跨会话恢复）"""
         md_path = self._get_filepath(method, date)
@@ -619,11 +638,14 @@ class MarketDataCache:
                 if len(date_str) != 10:
                     continue
                 key = self._make_key(method, date_str)
-                if key in self._memory:
-                    continue
-                data = self._load_disk(method, date_str)
+                # H-opt-1: 锁内检查存在性，锁外做磁盘 IO，再加锁写入
+                with self._lock:
+                    if key in self._memory:
+                        continue
+                data = self._load_disk(method, date_str)  # 磁盘读不持锁
                 if data is not None:
-                    self._memory[key] = data
+                    with self._lock:
+                        self._memory[key] = data
                     count += 1
                 if count >= days:
                     break
@@ -668,10 +690,12 @@ class MarketDataCache:
             if not date:
                 continue
             key = self._make_key("get_market_sentiment", date)
-            if key in self._memory:
-                continue
-            self._memory[key] = item
-            self._save_disk("get_market_sentiment", date, item)
+            # H-opt-1: 锁内检查+写入 _memory（RLock 可重入，磁盘写在锁外避免阻塞）
+            with self._lock:
+                if key in self._memory:
+                    continue
+                self._memory[key] = item
+            self._save_disk("get_market_sentiment", date, item)  # 磁盘写不持锁
 
         logger.info(f"📅 [历史回填] get_market_sentiment: {len(history)} 天")
 
@@ -709,8 +733,10 @@ class MarketDataCache:
                     continue
                 # price_daily 的 key 只用 date，不含 trade_date
                 key = f"price_daily_{symbol}_{date}"
-                if key in self._stock_memory:
-                    continue
+                # H-opt-1: 锁内检查 _stock_memory 存在性
+                with self._lock:
+                    if key in self._stock_memory:
+                        continue
                 # 文件名也只用 date，不含 trade_date
                 dirpath = self.stock_cache_dir / symbol
                 dirpath.mkdir(parents=True, exist_ok=True)
@@ -718,16 +744,19 @@ class MarketDataCache:
                 if filepath.with_suffix(".cache.json").exists():
                     continue
 
-                self._stock_memory[key] = item
+                # H-opt-1: 锁内写入 _stock_memory
+                with self._lock:
+                    self._stock_memory[key] = item
                 title = METHOD_TITLES.get("price_daily", "个股日线行情")
                 try:
-                    filepath.write_text(
+                    # H-opt-2: 原子写入 MD + JSON（tmp + replace）
+                    self._atomic_write_text(
+                        filepath,
                         to_markdown(item, f"{title} — {symbol} ({date})"),
-                        encoding="utf-8",
                     )
-                    filepath.with_suffix(".cache.json").write_text(
+                    self._atomic_write_text(
+                        filepath.with_suffix(".cache.json"),
                         json.dumps(_to_jsonable(item), ensure_ascii=False),
-                        encoding="utf-8",
                     )
                     saved += 1
                 except Exception as e:
@@ -744,20 +773,28 @@ class MarketDataCache:
             if not sdir.exists():
                 continue
             # 文件名格式：price_daily_{date}.md（不含 trade_date）
+            symbol_count = 0  # M-opt-3: per-symbol 限制，每个 symbol 最多 days 个文件
             for f in sorted(sdir.glob("price_daily_*.md"), reverse=True):
                 try:
                     date_str = f.stem.replace("price_daily_", "")
                     key = f"price_daily_{symbol}_{date_str}"
-                    if key in self._stock_memory:
-                        continue
+                    # H-opt-1: 锁内检查存在性
+                    with self._lock:
+                        if key in self._stock_memory:
+                            continue
                     json_path = f.with_suffix(".cache.json")
                     if json_path.exists():
-                        data = json.loads(json_path.read_text(encoding="utf-8"))
+                        data = json.loads(json_path.read_text(encoding="utf-8"))  # 磁盘读不持锁
                         if data is not None:
-                            self._stock_memory[key] = data
+                            # H-opt-1: 锁内写入
+                            with self._lock:
+                                self._stock_memory[key] = data
                             count += 1
-                    if count >= days * len(symbols):
-                        return count
+                            symbol_count += 1
+                    # M-opt-3: per-symbol 限制（每个 symbol 最多 days 个），
+                    # break 内层循环继续下一个 symbol，避免 symbol 1 占满全局预算
+                    if symbol_count >= days:
+                        break
                 except Exception:
                     pass
         return count

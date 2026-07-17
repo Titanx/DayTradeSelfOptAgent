@@ -203,6 +203,10 @@ class AStockTradingGraph:
         )
         self.memory = TradingMemoryLog(self.config)
 
+        # (round-9, M-core-4): market_direction 按 trade_date 缓存，
+        # 避免跨日调用 analyze 时复用旧交易日的市场方向（M8 修复引入的回归）
+        self._market_direction_cache = {}
+
         # 构建图
         self._build_graph()
 
@@ -363,7 +367,11 @@ class AStockTradingGraph:
         # H2: 修复两个 bug — (1) 缓存路径错误（overview 存在 overview_cache/ 而非 market_cache/）；
         #                  (2) 类型不匹配（config.market_overview 是 string，compute_market_signal 期望 dict）
         # 改用 load_overview 直接加载 dict，自动走 overview_cache
-        market_direction = self.config.get("market_direction", "")
+        # (round-9, M-core-4): 改用实例级 _market_direction_cache 按 trade_date 缓存，
+        # 不再写回 self.config（config 应保持只读），避免跨日批处理时复用旧交易日的市场方向。
+        if not hasattr(self, '_market_direction_cache'):
+            self._market_direction_cache = {}
+        market_direction = self._market_direction_cache.get(trade_date, "")
         if not market_direction:
             try:
                 from scripts.batch_predict import compute_market_signal
@@ -373,7 +381,7 @@ class AStockTradingGraph:
                 if overview_dict:
                     market_direction = compute_market_signal(overview_dict)
                     if market_direction:
-                        self.config["market_direction"] = market_direction
+                        self._market_direction_cache[trade_date] = market_direction
                         logger.info(f"market_direction 惰性计算: {market_direction[:80]}")
             except Exception as e:
                 logger.debug(f"market_direction 惰性计算失败: {e}")
@@ -402,10 +410,11 @@ class AStockTradingGraph:
         # 运行图
         # H1: 显式设置 recursion_limit，避免工具循环路径触发 GraphRecursionError
         # 默认 25 不够：4 分析师 × 工具循环 + 辩论 + 风险辩论 + PM 可能 > 25
+        # (round-9, L-core-7): 从配置读取，默认 120 留余量（原硬编码 100 无余量）
         try:
             final_state = self.graph.invoke(
                 initial_state,
-                config={"recursion_limit": 100},
+                config={"recursion_limit": self.config.get("recursion_limit", 120)},
             )
         except Exception as e:
             logger.error(f"图运行失败: {e}")
@@ -456,6 +465,8 @@ class AStockTradingGraph:
                 json_match = re.search(r'"position(?:_pct)?":\s*([\d.]+)', decision_text)
                 if json_match:
                     val = float(json_match.group(1))
+                    # (round-9, L-core-4): val=1.0 是歧义边界（可能 1% 或 100%）。
+                    # PortfolioDecision schema 有 le=0.2 约束，正常 LLM 输出 ≤0.2，不触发此回退。
                     position_pct = val / 100.0 if val > 1.0 else val
             if position_pct is not None:
                 # 硬约束：单票 ≤ 20%
@@ -694,7 +705,8 @@ class AStockTradingGraph:
         if rating == "Hold" and action == "Hold" and confidence == 0.5:
             try:
                 # 尝试提取 JSON 块
-                json_match = re.search(r'\{[\s\S]*"rating"[\s\S]*\}', text)
+                # (round-9, L-core-5): [\s\S]* 贪婪匹配会吞掉后续内容，改非贪婪
+                json_match = re.search(r'\{[\s\S]*?"rating"[\s\S]*?\}', text)
                 if json_match:
                     data = _json.loads(json_match.group(0))
                     if "decision" in data:

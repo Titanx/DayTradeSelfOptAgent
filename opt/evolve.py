@@ -60,7 +60,11 @@ def _load_accuracy_history() -> List[Dict]:
 
 
 def _save_accuracy_history(history: List[Dict]):
-    HISTORY_FILE.write_text(json.dumps(history, ensure_ascii=False, indent=2), encoding="utf-8")
+    # (round-9) M-opt-4: 原子写入（tmp + replace），避免崩溃产生损坏 JSON 致使 _load_accuracy_history 返回 []
+    # 复用 market_cache.py _save_disk 的同款模式
+    tmp = HISTORY_FILE.with_name(HISTORY_FILE.name + ".tmp")
+    tmp.write_text(json.dumps(history, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp.replace(HISTORY_FILE)  # 原子操作（同文件系统下 os.replace）
 
 
 def record_run(run_id: str, rollout_data: dict, edits_data: dict = None,

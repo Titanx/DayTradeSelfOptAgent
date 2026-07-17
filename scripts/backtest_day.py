@@ -1,4 +1,7 @@
 """一日游回测: Day0(0622分析) → Day1(0623实盘)"""
+# TODO: STEP 基准未统一为 d1o（round-9 未修）
+# 该脚本为针对 2026-06-22→0623 的一次性历史回测（日期与 PREDICTIONS 均硬编码），
+# 修改 STEP 基准会破坏历史回测可复现性，故按 round-9 保守策略仅标注，不改逻辑。
 import urllib.request, json
 
 STOCKS = [

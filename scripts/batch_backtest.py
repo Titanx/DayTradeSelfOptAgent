@@ -64,9 +64,14 @@ def get_klines(code):
 
 
 def load_pred(code, d0):
+    # M-scripts-5 (round-9): 缓存文件损坏时 json.loads 抛异常会终止整个批量回测，加 try/except 返回 None
     for f in RESULTS_DIR.glob(f"{code}_{d0}_*analysis.cache.json"):
-        d = json.loads(f.read_text(encoding="utf-8"))
-        return {"rating":d.get("rating","?"),"conf":d.get("confidence",0)}
+        try:
+            d = json.loads(f.read_text(encoding="utf-8"))
+            return {"rating": d.get("rating", "?"), "conf": d.get("confidence", 0)}
+        except Exception:
+            return None
+    return None
 
 
 def main():

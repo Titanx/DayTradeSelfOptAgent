@@ -69,8 +69,8 @@ def _generate_readme(run_id: str, rollout_data: dict, trace_summary: list,
         "| 总样本 | {} |".format(overall.get("total", 0)),
         "| 命中 (HIT) | {} |".format(overall.get("hit", 0)),
         "| 规避 (AVOID) | {} |".format(overall.get("avoid", 0)),
-        "| 踏空 (MISS) | {} |".format(overall.get("miss", 0)),
-        "| 漏判 (STEP) | {} |".format(overall.get("step", 0)),
+        "| 买入失败 (MISS) | {} |".format(overall.get("miss", 0)),  # (round-9) M-opt-2: MISS=买入但下跌，原"踏空"标签与 STEP 语义错位
+        "| 踏空 (STEP) | {} |".format(overall.get("step", 0)),     # (round-9) M-opt-2: STEP=未买入但涨了，原"漏判"标签与 case 区段不一致
         "| 准确率 | {}% |".format(overall.get("accuracy", 0)),
         "",
         "## 板块明细",
@@ -133,7 +133,8 @@ def _generate_readme(run_id: str, rollout_data: dict, trace_summary: list,
     lines.append("## 轨迹文件清单")
     lines.append("")
     for t in trace_summary:
-        verdict_emoji = {"HIT": "✅", "AVOID": "🟢", "MISS": "❌", "STEP": "⚠️"}.get(t.get("verdict", ""), "❓")
+        # (round-9) M-opt-1: H5 后 collector 只生成 STOP/FLAT 聚合为 MISS，移除死键 MISS，补 STOP/FLAT 错误标记
+        verdict_emoji = {"HIT": "✅", "AVOID": "🟢", "STOP": "❌", "FLAT": "❌", "STEP": "⚠️"}.get(t.get("verdict", ""), "❓")
         lines.append("- {} **{}** ({}) — {} [json](traces/{}/{}_{}_agent_trace.cache.json) | [md](traces/{}/{}_{}_agent_trace.md)".format(
             verdict_emoji,
             t.get("name", t["code"]), t["code"],

@@ -20,82 +20,94 @@ STOCKS = [
     ("sz002415", "海康威视", "视觉"),
 ]
 
-# 拉取宁德时代的K线,找6月所有交易日
-sid0 = "sz300750"
-klines = json.loads(urllib.request.urlopen(
-    urllib.request.Request(
-        f"http://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param={sid0},day,,,60,qfq",
-        headers={"User-Agent": "Mozilla/5.0"}
-    ), timeout=10
-).read().decode("utf-8"))["data"][sid0]["qfqday"]
-
-# 找6月交易日,排除当天(0622) 和 已分析的(0618)
-existing_dates = set()
-RESULTS_DIR = project_dir / "data" / "results"
-for f in RESULTS_DIR.glob("*_analysis.cache.json"):
+# M-scripts-6 (round-9): 业务逻辑包进 main() + __main__ 守护，
+# 模块级网络调用加 try/except，避免网络失败时整个脚本崩溃且无法被 import
+def main():
+    # 拉取宁德时代的K线,找6月所有交易日
+    sid0 = "sz300750"
+    # M-scripts-6 (round-9): 网络调用加 try/except，失败时打印并返回，不再让脚本崩溃
     try:
-        d = json.loads(f.read_text(encoding="utf-8"))
-        if d.get("trade_date"):
-            existing_dates.add(d["trade_date"])
-    except Exception:
-        pass
+        klines = json.loads(urllib.request.urlopen(
+            urllib.request.Request(
+                f"http://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param={sid0},day,,,60,qfq",
+                headers={"User-Agent": "Mozilla/5.0"}
+            ), timeout=10
+        ).read().decode("utf-8"))["data"][sid0]["qfqday"]
+    except Exception as e:
+        print(f"❌ 拉取 {sid0} K线失败: {e}")
+        return
 
-target_dates = []
-for k in klines:
-    date = k[0]
-    if "2026-06-" in date and date not in existing_dates and date != "2026-06-22":
-        target_dates.append(date)
-
-target_dates = sorted(target_dates)[-4:]  # 最近4天
-print(f"已有分析: {sorted(existing_dates)}")
-print(f"待补跑: {target_dates}")
-print(f"预计: {len(target_dates)}天 x 5股 x ~3min = ~{len(target_dates)*15}min")
-print("=" * 60)
-
-config = get_config()
-config["max_debate_rounds"] = 1
-config["max_risk_discuss_rounds"] = 1
-
-CACHE = MarketDataCache.get_instance()
-
-for trade_date in target_dates:
-    CACHE.set_trade_date(trade_date)
-
-    # 预加载公共数据
-    print(f"\n📦 预加载 {trade_date} 公共缓存...")
-    try:
-        CACHE.preload(symbols=["300750"])
-    except Exception:
-        pass
-
-    for sid, name, sector in STOCKS:
-        pure_code = sid[2:]
-        # 检查是否已有
-        cache_file = RESULTS_DIR / f"{pure_code}_{trade_date}_analysis.cache.json"
-        if cache_file.exists():
-            print(f"  {pure_code} {name}: 已有 → 跳过")
-            continue
-
-        print(f"\n{'─' * 50}")
-        print(f"  🎯 {trade_date} {pure_code} {name} [{sector}]")
-        print(f"{'─' * 50}")
-
-        t0 = time.time()
+    # 找6月交易日,排除当天(0622) 和 已分析的(0618)
+    existing_dates = set()
+    RESULTS_DIR = project_dir / "data" / "results"
+    for f in RESULTS_DIR.glob("*_analysis.cache.json"):
         try:
-            graph = AStockTradingGraph(config=config)
-            result = graph.analyze(
-                symbol=pure_code,
-                trade_date=trade_date,
-                stock_name=name,
-            )
-            elapsed = time.time() - t0
-            rating = result.get("rating", "?")
-            confidence = result.get("confidence", 0)
-            print(f"  📊 {rating} conf={confidence:.0%}  ⏱️ {elapsed:.0f}s")
-        except Exception as e:
-            elapsed = time.time() - t0
-            print(f"  ❌ 失败 ({elapsed:.0f}s): {e}")
+            d = json.loads(f.read_text(encoding="utf-8"))
+            if d.get("trade_date"):
+                existing_dates.add(d["trade_date"])
+        except Exception:
+            pass
 
-print("\n" + "=" * 60)
-print("  补跑完成 ✅")
-print("=" * 60)
+    target_dates = []
+    for k in klines:
+        date = k[0]
+        if "2026-06-" in date and date not in existing_dates and date != "2026-06-22":
+            target_dates.append(date)
+
+    target_dates = sorted(target_dates)[-4:]  # 最近4天
+    print(f"已有分析: {sorted(existing_dates)}")
+    print(f"待补跑: {target_dates}")
+    print(f"预计: {len(target_dates)}天 x 5股 x ~3min = ~{len(target_dates)*15}min")
+    print("=" * 60)
+
+    config = get_config()
+    config["max_debate_rounds"] = 1
+    config["max_risk_discuss_rounds"] = 1
+
+    CACHE = MarketDataCache.get_instance()
+
+    for trade_date in target_dates:
+        CACHE.set_trade_date(trade_date)
+
+        # 预加载公共数据
+        print(f"\n📦 预加载 {trade_date} 公共缓存...")
+        try:
+            CACHE.preload(symbols=["300750"])
+        except Exception:
+            pass
+
+        for sid, name, sector in STOCKS:
+            pure_code = sid[2:]
+            # 检查是否已有
+            cache_file = RESULTS_DIR / f"{pure_code}_{trade_date}_analysis.cache.json"
+            if cache_file.exists():
+                print(f"  {pure_code} {name}: 已有 → 跳过")
+                continue
+
+            print(f"\n{'─' * 50}")
+            print(f"  🎯 {trade_date} {pure_code} {name} [{sector}]")
+            print(f"{'─' * 50}")
+
+            t0 = time.time()
+            try:
+                graph = AStockTradingGraph(config=config)
+                result = graph.analyze(
+                    symbol=pure_code,
+                    trade_date=trade_date,
+                    stock_name=name,
+                )
+                elapsed = time.time() - t0
+                rating = result.get("rating", "?")
+                confidence = result.get("confidence", 0)
+                print(f"  📊 {rating} conf={confidence:.0%}  ⏱️ {elapsed:.0f}s")
+            except Exception as e:
+                elapsed = time.time() - t0
+                print(f"  ❌ 失败 ({elapsed:.0f}s): {e}")
+
+    print("\n" + "=" * 60)
+    print("  补跑完成 ✅")
+    print("=" * 60)
+
+
+if __name__ == "__main__":
+    main()

@@ -399,8 +399,13 @@ class AStockTradingGraph:
         }
 
         # 运行图
+        # H1: 显式设置 recursion_limit，避免工具循环路径触发 GraphRecursionError
+        # 默认 25 不够：4 分析师 × 工具循环 + 辩论 + 风险辩论 + PM 可能 > 25
         try:
-            final_state = self.graph.invoke(initial_state)
+            final_state = self.graph.invoke(
+                initial_state,
+                config={"recursion_limit": 100},
+            )
         except Exception as e:
             logger.error(f"图运行失败: {e}")
             raise
@@ -433,11 +438,22 @@ class AStockTradingGraph:
         }
 
         # 解析仓位建议（从决策文本）
+        # C1: 支持 Markdown 格式（**Position**: 20%）和 JSON 回退格式（"position": 15）
+        # 单位识别：>1 视为百分数（如 20 → 0.2），≤1 视为比例（如 0.2 → 0.2）
         position_pct = None
         try:
+            # 路径1: Markdown 格式（结构化输出成功时 render_portfolio_decision 生成）
             pos_match = re.search(r'\*\*Position\*\*:\s*([\d.]+)%?', decision_text)
             if pos_match:
-                position_pct = float(pos_match.group(1)) / 100.0
+                val = float(pos_match.group(1))
+                position_pct = val / 100.0 if val > 1.0 else val
+            else:
+                # 路径2: JSON 格式（结构化输出失败回退到自由文本时 LLM 可能输出 JSON）
+                json_match = re.search(r'"position(?:_pct)?":\s*([\d.]+)', decision_text)
+                if json_match:
+                    val = float(json_match.group(1))
+                    position_pct = val / 100.0 if val > 1.0 else val
+            if position_pct is not None:
                 # 硬约束：单票 ≤ 20%
                 max_pos = self.config.get("max_position_pct", 0.2)
                 position_pct = min(position_pct, max_pos)
@@ -517,23 +533,56 @@ class AStockTradingGraph:
 
         for decision_date, decision_symbol, entry_text in ticker_pending:
             try:
-                # 获取股价数据（多取几天确保能找到 Day1/Day2）
-                from dataflows.akshare_adapter import get_stock_daily
-                df = get_stock_daily(symbol, start_date=f"{decision_date.replace('-', '')[:6]}01")
-                if df is None or df.empty:
-                    continue
-
                 # 构建 date -> (open, close, high, low) 映射
+                # 优先复用 Phase 0 预加载到 MarketDataCache 的 price_daily 缓存，
+                # 避免在 ThreadPoolExecutor 并发线程中无节流调用 get_stock_daily 触发反爬。
                 price_map = {}
-                if "close" in df.columns:
+                cache_items = None
+                try:
+                    from dataflows.market_cache import MarketDataCache
+                    cache_items = MarketDataCache.get_instance().get_stock_price_daily_history(symbol)
+                except Exception as e:
+                    logger.debug(f"price_daily 缓存读取失败 [{symbol}]: {e}")
+                    cache_items = None
+
+                if cache_items:
+                    # 缓存命中：直接构建 price_map（字段顺序 open, close, high, low）
+                    for item in cache_items:
+                        d = item.get("date", "")
+                        if not d:
+                            continue
+                        try:
+                            o = float(item.get("open", 0) or 0)
+                            c = float(item.get("close", 0) or 0)
+                            h = float(item.get("high", 0) or 0)
+                            l = float(item.get("low", 0) or 0)
+                            price_map[str(d)[:10]] = (o, c, h, l)
+                        except (TypeError, ValueError):
+                            continue
+                else:
+                    # 缓存未命中，回退到原逻辑调用 get_stock_daily
+                    from dataflows.akshare_adapter import get_stock_daily
+                    df = get_stock_daily(symbol, start_date=f"{decision_date.replace('-', '')[:6]}01")
+                    if df is None or df.empty:
+                        continue
+                    if "close" not in df.columns:
+                        continue
                     for _, r in df.iterrows():
                         date_str = str(r["date"])[:10]
                         o = float(r.get("open", r.get("开盘", 0)) or 0)
                         c = float(r.get("close", r.get("收盘", 0)) or 0)
                         h = float(r.get("high", r.get("最高", 0)) or 0)
                         l = float(r.get("low", r.get("最低", 0)) or 0)
+                        # L6: 缺失字段静默填 0 会导致 hit_price=0 永远 HIT，跳过残缺行
+                        if not (o > 0 and c > 0 and h > 0 and l > 0):
+                            logger.warning(
+                                f"[_settle_pending_returns] 跳过 {symbol} {date_str} "
+                                f"残缺 OHLC: o={o} c={c} h={h} l={l}"
+                            )
+                            continue
                         price_map[date_str] = (o, c, h, l)
-                else:
+
+                if not price_map:
                     continue
 
                 decision_clean = decision_date[:10]

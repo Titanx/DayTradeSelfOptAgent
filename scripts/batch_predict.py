@@ -314,7 +314,8 @@ def main():
 
     if args.date == "auto":
         from datetime import datetime
-        trade_date = datetime.now().strftime("%Y-%m-%d")
+        from dataflows.akshare_adapter import _BJ_TIME
+        trade_date = datetime.now(_BJ_TIME).strftime("%Y-%m-%d")
     else:
         trade_date = args.date
 

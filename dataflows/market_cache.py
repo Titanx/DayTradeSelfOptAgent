@@ -14,6 +14,7 @@
 import json
 import logging
 import os
+import threading
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -117,6 +118,8 @@ class MarketDataCache:
         self.opinion_cache_dir.mkdir(parents=True, exist_ok=True)
         self.stock_cache_dir = Path(stock_cache_dir) if stock_cache_dir else (_data / "stock_cache")
         self.stock_cache_dir.mkdir(parents=True, exist_ok=True)
+        # M4: 单例在 ThreadPoolExecutor 并发场景下被共享，内存 dict 读写需加锁保护
+        self._lock = threading.RLock()
         self._memory: Dict[str, Any] = {}
         self._opinion_memory: Dict[str, Any] = {}
         self._stock_memory: Dict[str, Any] = {}
@@ -127,66 +130,72 @@ class MarketDataCache:
     # ================================================================
 
     def set_trade_date(self, trade_date: str):
-        self._trade_date = trade_date
+        with self._lock:
+            self._trade_date = trade_date
 
     def get_trade_date(self) -> str:
         """获取当前缓存交易日（若未设置则返回空字符串）"""
-        return self._trade_date
+        with self._lock:
+            return self._trade_date
 
     def get_public_data(self, key: str) -> Optional[Any]:
         """通用键值缓存（不限 method 语义，任意 key → 内存+磁盘回退）"""
-        if key in self._memory:
-            return self._memory[key]
-        json_path = self.cache_dir / f"{key}.cache.json"
-        if json_path.exists():
-            try:
-                data = json.loads(json_path.read_text(encoding="utf-8"))
-                self._memory[key] = data
-                return data
-            except Exception:
-                pass
-        return None
+        with self._lock:
+            if key in self._memory:
+                return self._memory[key]
+            json_path = self.cache_dir / f"{key}.cache.json"
+            if json_path.exists():
+                try:
+                    data = json.loads(json_path.read_text(encoding="utf-8"))
+                    self._memory[key] = data
+                    return data
+                except Exception:
+                    pass
+            return None
 
     def store_public_data(self, key: str, data: Any):
         """通用键值缓存写入（内存+JSON磁盘）"""
-        self._memory[key] = data
-        json_path = self.cache_dir / f"{key}.cache.json"
-        try:
-            json_path.write_text(
-                json.dumps(_to_jsonable(data), ensure_ascii=False),
-                encoding="utf-8",
-            )
-        except Exception as e:
-            logger.warning(f"公共数据缓存写入失败 {key}: {e}")
+        with self._lock:
+            self._memory[key] = data
+            json_path = self.cache_dir / f"{key}.cache.json"
+            try:
+                json_path.write_text(
+                    json.dumps(_to_jsonable(data), ensure_ascii=False),
+                    encoding="utf-8",
+                )
+            except Exception as e:
+                logger.warning(f"公共数据缓存写入失败 {key}: {e}")
 
     def get(self, method: str, date: str = None) -> Optional[Any]:
         """从缓存获取数据（内存 → 磁盘回退）"""
-        date = date or self._trade_date
-        if not date:
+        with self._lock:
+            date = date or self._trade_date
+            if not date:
+                return None
+
+            key = self._make_key(method, date)
+            if key in self._memory:
+                logger.info(f"📦 [缓存命中-内存] {date} {method}")
+                return self._memory[key]
+
+            # 磁盘回退
+            data = self._load_disk(method, date)
+            if data is not None:
+                self._memory[key] = data
+                logger.info(f"📦 [缓存命中-磁盘] {date} {method}")
+                return data
             return None
-
-        key = self._make_key(method, date)
-        if key in self._memory:
-            logger.info(f"📦 [缓存命中-内存] {date} {method}")
-            return self._memory[key]
-
-        # 磁盘回退
-        data = self._load_disk(method, date)
-        if data is not None:
-            self._memory[key] = data
-            logger.info(f"📦 [缓存命中-磁盘] {date} {method}")
-            return data
-        return None
 
     def set(self, method: str, data: Any, date: str = None):
         """写入缓存（内存 + Markdown 磁盘），可按任意日期存储"""
-        date = date or self._trade_date
-        if not date:
-            return
+        with self._lock:
+            date = date or self._trade_date
+            if not date:
+                return
 
-        key = self._make_key(method, date)
-        self._memory[key] = data
-        self._save_disk(method, date, data)
+            key = self._make_key(method, date)
+            self._memory[key] = data
+            self._save_disk(method, date, data)
 
     def fetch(self, method: str) -> Optional[Any]:
         """获取或拉取：缓存命中则返回，否则实时拉取并缓存"""
@@ -299,7 +308,8 @@ class MarketDataCache:
         return sorted(dates)
 
     def invalidate(self):
-        self._memory.clear()
+        with self._lock:
+            self._memory.clear()
         logger.info("🧹 内存缓存已失效")
 
     def is_public_method(self, method: str) -> bool:
@@ -310,46 +320,48 @@ class MarketDataCache:
     # ================================================================
 
     def get_opinion(self, symbol: str, method: str) -> Optional[Any]:
-        if not self._trade_date:
-            return None
-        key = self._make_opinion_key(symbol, method)
-        if key in self._opinion_memory:
-            logger.info(f"📦 [舆情缓存命中-内存] {symbol} {method}")
-            return self._opinion_memory[key]
+        with self._lock:
+            if not self._trade_date:
+                return None
+            key = self._make_opinion_key(symbol, method)
+            if key in self._opinion_memory:
+                logger.info(f"📦 [舆情缓存命中-内存] {symbol} {method}")
+                return self._opinion_memory[key]
 
-        # 磁盘回退
-        data = self._load_opinion_disk(symbol, method)
-        if data is not None:
-            self._opinion_memory[key] = data
-            logger.info(f"📦 [舆情缓存命中-磁盘] {symbol} {method}")
-            return data
-        return None
+            # 磁盘回退
+            data = self._load_opinion_disk(symbol, method)
+            if data is not None:
+                self._opinion_memory[key] = data
+                logger.info(f"📦 [舆情缓存命中-磁盘] {symbol} {method}")
+                return data
+            return None
 
     def set_opinion(self, symbol: str, method: str, data: Any):
-        if not self._trade_date:
-            return
-        key = self._make_opinion_key(symbol, method)
-        self._opinion_memory[key] = data
+        with self._lock:
+            if not self._trade_date:
+                return
+            key = self._make_opinion_key(symbol, method)
+            self._opinion_memory[key] = data
 
-        filepath = self._get_opinion_filepath(symbol, method)
-        title = METHOD_TITLES.get(method, method)
+            filepath = self._get_opinion_filepath(symbol, method)
+            title = METHOD_TITLES.get(method, method)
 
-        # MD 人类可读
-        try:
-            filepath.write_text(to_markdown(data, f"{title} — {symbol} ({self._trade_date})"), encoding="utf-8")
-        except Exception as e:
-            logger.warning(f"舆情 MD 写入失败 {symbol} {method}: {e}")
+            # MD 人类可读
+            try:
+                filepath.write_text(to_markdown(data, f"{title} — {symbol} ({self._trade_date})"), encoding="utf-8")
+            except Exception as e:
+                logger.warning(f"舆情 MD 写入失败 {symbol} {method}: {e}")
 
-        # JSON 跨会话恢复
-        json_path = filepath.with_suffix(".cache.json")
-        try:
-            json_path.write_text(
-                json.dumps(_to_jsonable(data), ensure_ascii=False),
-                encoding="utf-8",
-            )
-            logger.info(f"💾 [舆情缓存保存] {symbol} {method}")
-        except Exception as e:
-            logger.warning(f"舆情 JSON 写入失败 {symbol} {method}: {e}")
+            # JSON 跨会话恢复
+            json_path = filepath.with_suffix(".cache.json")
+            try:
+                json_path.write_text(
+                    json.dumps(_to_jsonable(data), ensure_ascii=False),
+                    encoding="utf-8",
+                )
+                logger.info(f"💾 [舆情缓存保存] {symbol} {method}")
+            except Exception as e:
+                logger.warning(f"舆情 JSON 写入失败 {symbol} {method}: {e}")
 
     def preload_opinions(self):
         """扫描磁盘已有舆情缓存，加载到内存（跨会话恢复）"""
@@ -385,12 +397,13 @@ class MarketDataCache:
         return None
 
     def invalidate_opinion(self, symbol: str = None):
-        if symbol:
-            keys_to_del = [k for k in self._opinion_memory if symbol in k]
-            for k in keys_to_del:
-                del self._opinion_memory[k]
-        else:
-            self._opinion_memory.clear()
+        with self._lock:
+            if symbol:
+                keys_to_del = [k for k in self._opinion_memory if symbol in k]
+                for k in keys_to_del:
+                    del self._opinion_memory[k]
+            else:
+                self._opinion_memory.clear()
         logger.info("🧹 舆情缓存已失效")
 
     # ================================================================
@@ -405,19 +418,20 @@ class MarketDataCache:
 
     def get_stock_data(self, symbol: str, method: str) -> Optional[Any]:
         """从缓存获取个股数据（内存 → 磁盘回退）"""
-        if not self._trade_date:
-            return None
-        key = self._make_stock_key(symbol, method)
-        if key in self._stock_memory:
-            logger.info(f"📦 [个股缓存命中-内存] {symbol} {method}")
-            return self._stock_memory[key]
+        with self._lock:
+            if not self._trade_date:
+                return None
+            key = self._make_stock_key(symbol, method)
+            if key in self._stock_memory:
+                logger.info(f"📦 [个股缓存命中-内存] {symbol} {method}")
+                return self._stock_memory[key]
 
-        data = self._load_stock_disk(symbol, method)
-        if data is not None:
-            self._stock_memory[key] = data
-            logger.info(f"📦 [个股缓存命中-磁盘] {symbol} {method}")
-            return data
-        return None
+            data = self._load_stock_disk(symbol, method)
+            if data is not None:
+                self._stock_memory[key] = data
+                logger.info(f"📦 [个股缓存命中-磁盘] {symbol} {method}")
+                return data
+            return None
 
     def set_stock_data(self, symbol: str, method: str, data: Any, skip_disk: bool = False):
         """写入个股缓存（内存 + MD + JSON）
@@ -430,33 +444,34 @@ class MarketDataCache:
                        用于盘中实时行情：盘中价格不是收盘数据，
                        写入磁盘会污染收盘数据缓存（C8 修复）。
         """
-        if not self._trade_date:
-            return
-        key = self._make_stock_key(symbol, method)
-        self._stock_memory[key] = data
+        with self._lock:
+            if not self._trade_date:
+                return
+            key = self._make_stock_key(symbol, method)
+            self._stock_memory[key] = data
 
-        # 盘中实时价不写磁盘：避免污染收盘数据缓存
-        if skip_disk:
-            logger.info(f"📦 [个股缓存-仅内存] {symbol} {method}（盘中，不写磁盘）")
-            return
+            # 盘中实时价不写磁盘：避免污染收盘数据缓存
+            if skip_disk:
+                logger.info(f"📦 [个股缓存-仅内存] {symbol} {method}（盘中，不写磁盘）")
+                return
 
-        filepath = self._get_stock_filepath(symbol, method)
-        title = METHOD_TITLES.get(method, method)
+            filepath = self._get_stock_filepath(symbol, method)
+            title = METHOD_TITLES.get(method, method)
 
-        try:
-            filepath.write_text(to_markdown(data, f"{title} — {symbol} ({self._trade_date})"), encoding="utf-8")
-        except Exception as e:
-            logger.warning(f"个股 MD 写入失败 {symbol} {method}: {e}")
+            try:
+                filepath.write_text(to_markdown(data, f"{title} — {symbol} ({self._trade_date})"), encoding="utf-8")
+            except Exception as e:
+                logger.warning(f"个股 MD 写入失败 {symbol} {method}: {e}")
 
-        json_path = filepath.with_suffix(".cache.json")
-        try:
-            json_path.write_text(
-                json.dumps(_to_jsonable(data), ensure_ascii=False),
-                encoding="utf-8",
-            )
-            logger.info(f"💾 [个股缓存保存] {symbol} {method}")
-        except Exception as e:
-            logger.warning(f"个股 JSON 写入失败 {symbol} {method}: {e}")
+            json_path = filepath.with_suffix(".cache.json")
+            try:
+                json_path.write_text(
+                    json.dumps(_to_jsonable(data), ensure_ascii=False),
+                    encoding="utf-8",
+                )
+                logger.info(f"💾 [个股缓存保存] {symbol} {method}")
+            except Exception as e:
+                logger.warning(f"个股 JSON 写入失败 {symbol} {method}: {e}")
 
     def preload_stock_data(self, symbols: list = None):
         """扫描磁盘已有个股缓存，加载到内存（跨会话恢复）"""
@@ -503,23 +518,24 @@ class MarketDataCache:
 
     def invalidate_stock(self, symbol: str = None):
         """失效个股缓存（内存 + 磁盘）"""
-        if symbol:
-            keys_to_del = [k for k in self._stock_memory if symbol in k]
-            for k in keys_to_del:
-                del self._stock_memory[k]
-            # 清磁盘：删除该 symbol 的整个目录
-            symbol_dir = self.stock_cache_dir / symbol
-            if symbol_dir.exists():
-                import shutil
-                shutil.rmtree(symbol_dir, ignore_errors=True)
-        else:
-            self._stock_memory.clear()
-            # 清磁盘：删除所有 symbol 子目录
-            if self.stock_cache_dir.exists():
-                import shutil
-                for d in self.stock_cache_dir.iterdir():
-                    if d.is_dir():
-                        shutil.rmtree(d, ignore_errors=True)
+        with self._lock:
+            if symbol:
+                keys_to_del = [k for k in self._stock_memory if symbol in k]
+                for k in keys_to_del:
+                    del self._stock_memory[k]
+                # 清磁盘：删除该 symbol 的整个目录
+                symbol_dir = self.stock_cache_dir / symbol
+                if symbol_dir.exists():
+                    import shutil
+                    shutil.rmtree(symbol_dir, ignore_errors=True)
+            else:
+                self._stock_memory.clear()
+                # 清磁盘：删除所有 symbol 子目录
+                if self.stock_cache_dir.exists():
+                    import shutil
+                    for d in self.stock_cache_dir.iterdir():
+                        if d.is_dir():
+                            shutil.rmtree(d, ignore_errors=True)
         logger.info("🧹 个股缓存已失效 (内存+磁盘)")
 
     # ================================================================
@@ -557,11 +573,14 @@ class MarketDataCache:
             logger.warning(f"MD 写入失败 {date} {method}: {e}")
 
         # JSON 给程序恢复（DataFrame → list[dict]）
+        # M5: 原子写入 — 先写临时文件再 os.replace，避免并发写损坏缓存文件
         try:
-            json_path.write_text(
+            tmp = json_path.with_name(json_path.name + ".tmp")
+            tmp.write_text(
                 json.dumps(_to_jsonable(data), ensure_ascii=False),
                 encoding="utf-8",
             )
+            tmp.replace(json_path)  # 原子操作（同文件系统下 os.replace）
             logger.info(f"💾 [缓存保存] {date} {method}")
         except Exception as e:
             logger.warning(f"JSON 写入失败 {date} {method}: {e}")
@@ -737,6 +756,52 @@ class MarketDataCache:
                 except Exception:
                     pass
         return count
+
+    def get_stock_price_daily_history(self, symbol: str) -> List[Dict]:
+        """返回某只个股在 price_daily 缓存中的全部日线条目。
+
+        price_daily 由 _backfill_stock_prices 按日拆分存储，每条对应一个
+        `price_daily_{symbol}_{date}` 键。本方法扫描内存缓存，若不足则从
+        磁盘补读，最终返回 [{"date":..., "open":..., "high":..., "low":...,
+        "close":..., ...}, ...]，按日期升序排列。
+
+        用于 _settle_pending_returns 等场景，避免重复调用 get_stock_daily
+        触发反爬。
+        """
+        items: List[Dict] = []
+        prefix = f"price_daily_{symbol}_"
+        # 1) 内存命中
+        for k, v in self._stock_memory.items():
+            if k.startswith(prefix) and isinstance(v, dict):
+                items.append(v)
+        # 2) 内存不足，尝试从磁盘补读
+        if not items:
+            sdir = self.stock_cache_dir / symbol
+            if sdir.exists():
+                for f in sorted(sdir.glob("price_daily_*.md")):
+                    try:
+                        date_str = f.stem.replace("price_daily_", "")
+                        key = f"price_daily_{symbol}_{date_str}"
+                        if key in self._stock_memory:
+                            items.append(self._stock_memory[key])
+                            continue
+                        json_path = f.with_suffix(".cache.json")
+                        if json_path.exists():
+                            data = json.loads(json_path.read_text(encoding="utf-8"))
+                            if data is not None:
+                                self._stock_memory[key] = data
+                                items.append(data)
+                    except Exception:
+                        pass
+        if not items:
+            return []
+        # 去重 + 按日期升序
+        seen = {}
+        for it in items:
+            d = it.get("date", "")
+            if d and d not in seen:
+                seen[d] = it
+        return [seen[d] for d in sorted(seen.keys())]
 
     # ================================================================
     # 磁盘缓存清理

@@ -155,8 +155,8 @@ def aggregate(edits_data: dict, use_llm: bool = False) -> dict:
                     kw2 = _extract_sector_keywords(other_text)
                     kw_overlap = len(kw1 & kw2) > 0 if (kw1 and kw2) else False
 
-                    # M7: 关键词重叠需同时要求文本相似度达到最低阈值，避免同板块但意图相反的编辑误合并
-                    if overlap > 0.5 or (kw_overlap and overlap > 0.2):
+                    # M7/M8: 关键词重叠需同时要求文本相似度≥0.35，避免同板块但意图相反（如买入/卖出）的编辑误合并
+                    if overlap > 0.5 or (kw_overlap and overlap > 0.35):
                         similar_indices.append(i)
 
                 if similar_indices:

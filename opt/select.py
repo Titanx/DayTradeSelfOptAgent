@@ -72,7 +72,6 @@ def _score_error_backing(edit: dict, rollout: dict) -> float:
             miss = sector_data.get("miss", 0)
             step = sector_data.get("step", 0)
             score = max(score, min(40, (miss * 15) + (step * 8)))
-            break
 
     if score == 0:
         overall = summary.get("overall", {})

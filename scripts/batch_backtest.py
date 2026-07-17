@@ -12,6 +12,12 @@ PROJECT_DIR = Path(__file__).parent.parent
 sys.path.insert(0, str(PROJECT_DIR))
 RESULTS_DIR = PROJECT_DIR / "data" / "results"
 
+# H2: 从 config 读取止盈止损参数，与 collector.py / trading_graph.py 保持同步
+from config.default_config import get_config as _get_cfg
+_swing_cfg = _get_cfg().get("one_day_swing", {})
+TARGET_GAIN_PCT = _swing_cfg.get("target_gain_pct", 1.0)   # 止盈线 +1%
+STOP_LOSS_PCT = _swing_cfg.get("stop_loss_pct", 3.0)       # 止损线 -3%
+
 STOCKS = [
     ("600438","通威股份","光伏"),("601012","隆基绿能","光伏"),("300274","阳光电源","光伏"),
     ("688599","天合光能","光伏"),("300751","迈为股份","光伏"),("002459","晶澳科技","光伏"),
@@ -77,9 +83,10 @@ def main():
             if not pred or d0 not in k or d1 not in k or d2 not in k: continue
             is_bull=pred["rating"].lower() in ("buy","overweight")
             d1o=k[d1][0]; d2h=k[d2][2]; d2l=k[d2][3]; d2c=k[d2][1]
-            hit_p=d1o*1.01; stop_p=d1o*0.97
+            # H2: 从 config 读取止盈止损参数，避免与 config 修改不同步
+            hit_p=d1o*(1+TARGET_GAIN_PCT/100.0); stop_p=d1o*(1-STOP_LOSS_PCT/100.0)
             # H1: STEP 基准与 collector.py 对齐，用 d1_open（买入价）而非 d0_close
-            step_trig=(d2h/d1o-1)*100>=1.0
+            step_trig=(d2h/d1o-1)*100>=TARGET_GAIN_PCT
 
             if is_bull and d2h>=hit_p:     hit+=1
             elif is_bull and d2l<=stop_p:  stop+=1

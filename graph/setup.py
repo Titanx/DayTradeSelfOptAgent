@@ -114,8 +114,8 @@ class GraphSetup:
             technical_report: Optional[str]
             sentiment_report: Optional[str]
             policy_report: Optional[str]
-            investment_debate_state: Optional[Dict]
-            risk_debate_state: Optional[Dict]
+            investment_debate_state: Optional[Dict]  # M3: REPLACE 语义 — 节点返回时必须包含完整 dict（非合并）
+            risk_debate_state: Optional[Dict]        # M3: REPLACE 语义 — 节点返回时必须包含完整 dict（非合并）
             final_decision: Optional[str]
             market_overview: Optional[str]     # EvoSkill v0.2: 大盘/板块共享数据
             market_direction: Optional[str]    # 市场方向闸门: STRONG_BULL/BULL/NEUTRAL/BEAR/STRONG_BEAR + 闸门指令
@@ -277,6 +277,7 @@ class GraphSetup:
                 # 更新辩论状态
                 debate = state.get("investment_debate_state", {"count": 0})
                 debate["count"] = debate.get("count", 0) + 1
+                # M3: REPLACE: 必须返回完整 dict（LangGraph 对 dict 字段用 REPLACE 语义，非合并）
                 return {"messages": [response], "investment_debate_state": debate}
             return node_fn
 
@@ -454,6 +455,7 @@ class GraphSetup:
                 response.content = content
                 risk = state.get("risk_debate_state", {"count": 0})
                 risk["count"] = risk.get("count", 0) + 1
+                # M3: REPLACE: 必须返回完整 dict（LangGraph 对 dict 字段用 REPLACE 语义，非合并）
                 return {"messages": [response], "risk_debate_state": risk}
             return node_fn
 
@@ -696,8 +698,10 @@ class GraphSetup:
         rm_found = False
         for m in reversed(state.get("messages", [])):
             if hasattr(m, "type") and m.type == "ai":
-                c = str(m.content) if hasattr(m, "content") else ""
-                if c.strip():
+                # M1: content 可能为 None，getattr 防御 + 显式过滤 "None" 字符串，避免注入 prompt
+                raw = getattr(m, "content", None)
+                c = str(raw) if raw else ""
+                if c.strip() and c != "None":
                     parts.append(c)
                     rm_found = True
                 break  # 只看最后一条 AI 消息，不继续往前找

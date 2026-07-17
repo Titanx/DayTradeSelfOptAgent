@@ -21,6 +21,7 @@
 """
 
 import json
+import re
 import urllib.request
 import time
 import sys
@@ -38,9 +39,41 @@ from scripts.stock_universe import stocks_for_collector
 
 STOCKS = stocks_for_collector()
 
-# 策略参数 (与 README + batch_backtest.py 对齐)
-TARGET_GAIN_PCT = 1.0   # 止盈线 +1%
-STOP_LOSS_PCT = 3.0     # 止损线 -3%
+# 策略参数
+# H2: 从 config 读取，避免与 config 修改不同步（trading_graph 已读 config）
+from config.default_config import get_config as _get_cfg
+_swing_cfg = _get_cfg().get("one_day_swing", {})
+TARGET_GAIN_PCT = _swing_cfg.get("target_gain_pct", 1.0)   # 止盈线 +1%
+STOP_LOSS_PCT = _swing_cfg.get("stop_loss_pct", 3.0)       # 止损线 -3%
+
+
+def _extract_summary(decision_text: str) -> str:
+    """H3: 从 decision 文本中提取投资逻辑作为 summary。
+
+    results/ 文件顶层无 summary/investment_logic 字段，需从 decision 文本中的
+    JSON 子串或 Markdown 提取。
+    """
+    if not decision_text:
+        return ""
+    # 路径1: 从 JSON 代码块提取
+    json_match = re.search(r'```json\s*(\{.*?\})\s*```', decision_text, re.DOTALL)
+    if json_match:
+        try:
+            inner = json.loads(json_match.group(1))
+            for key in ("investment_logic", "reasoning", "summary", "rationale"):
+                val = inner.get(key, "")
+                if val:
+                    return str(val)[:300]
+        except Exception:
+            pass
+    # 路径2: 从 Markdown 字段提取（如 **投资逻辑**: xxx）
+    for pattern in [r'\*\*投资逻辑\*\*[：:]\s*(.+?)(?:\n\n|\n\*\*|\Z)',
+                    r'\*\*Investment Logic\*\*[：:]\s*(.+?)(?:\n\n|\n\*\*|\Z)',
+                    r'\*\*Reasoning\*\*[：:]\s*(.+?)(?:\n\n|\n\*\*|\Z)']:
+        m = re.search(pattern, decision_text, re.DOTALL)
+        if m:
+            return m.group(1).strip()[:300]
+    return ""
 
 
 def load_prediction(code, trade_date):
@@ -55,11 +88,15 @@ def load_prediction(code, trade_date):
         if f.exists():
             try:
                 d = json.loads(f.read_text(encoding="utf-8"))
+                # H3: 优先读顶层 summary，无则从 decision 文本提取投资逻辑
+                summary = (d.get("summary") or d.get("investment_logic") or "").strip()
+                if not summary and d.get("decision"):
+                    summary = _extract_summary(d["decision"])
                 return {
                     "symbol": d.get("symbol", code),
                     "rating": d.get("rating", "?"),
                     "confidence": d.get("confidence", 0),
-                    "summary": (d.get("summary") or d.get("investment_logic") or "")[:300],
+                    "summary": summary[:300],
                 }
             except Exception:
                 pass
@@ -76,11 +113,33 @@ def get_kline(sid):
         "?param={sid},day,,,30,qfq".format(sid=sid)
     )
     req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-    resp = urllib.request.urlopen(req, timeout=10)
+    # L7: 重试 + 指数退避，避免单次失败导致样本静默缺失
+    for attempt in range(3):
+        try:
+            resp = urllib.request.urlopen(req, timeout=10)
+            break
+        except Exception:
+            if attempt < 2:
+                time.sleep(1 * (attempt + 1))
+                continue
+            raise
     data = json.loads(resp.read().decode("utf-8"))["data"][sid]
     raw = data.get("qfqday") or data.get("day", [])
     # k 格式: [date, open, close, high, low, ...]
-    return {k[0]: (float(k[1]), float(k[2]), float(k[3]), float(k[4])) for k in raw}
+    # M6: 完整性校验 — len≥5 + OHLC 逻辑校验
+    # (high ≥ max(open,close)，low ≤ min(open,close)，open > 0)，剔除异常/残缺 K 线
+    result = {}
+    for k in raw:
+        if len(k) < 5:
+            continue
+        try:
+            o, c, h, l = float(k[1]), float(k[2]), float(k[3]), float(k[4])
+        except (TypeError, ValueError):
+            continue
+        if o <= 0 or h < max(o, c) or l > min(o, c):
+            continue
+        result[k[0]] = (o, c, h, l)
+    return result
 
 
 def _classify(verdict_rating: str, d1_open: float, d2_high: float,
@@ -301,8 +360,8 @@ def main():
 
     o = data["group_summary"]["overall"]
     print("Collected {} results".format(len(data["rollout_results"])))
-    print("  HIT: {}  STOP: {}  FLAT: {}  AVOID: {}  STEP: {}".format(
-        o["hit"], o["stop"], o["flat"], o["avoid"], o["step"],
+    print("  HIT: {}  STOP: {}  FLAT: {}  AVOID: {}  STEP: {}  MISS: {}".format(
+        o["hit"], o["stop"], o["flat"], o["avoid"], o["step"], o["miss"],
     ))
     print("  Accuracy: {}%".format(o["accuracy"]))
     print("Saved to: {}".format(output_path))

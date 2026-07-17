@@ -233,6 +233,21 @@ def main():
         step_status()
         return
 
+    # M9: 反复回滚检测 — 若最近 3 轮全部 rolled_back=True，
+    # 说明准确率在 65-70% 区间反复震荡，自动 SkillOpt 已无法稳定提升，
+    # 提示用户手动 evolve（结构性发现）。
+    history = _load_accuracy_history()
+    if len(history) >= 3:
+        recent_rolled_back = [h.get("rolled_back", False) for h in history[-3:]]
+        if all(recent_rolled_back):
+            print("\n" + "=" * 60)
+            print("⚠️  WARNING: 最近 3 轮 pipeline 全部触发回滚 (rolled_back=True)。")
+            print("    准确率在 65-70% 区间反复震荡，自动 SkillOpt 已无法稳定提升。")
+            print("    建议手动运行: python opt/run_pipeline.py --evolve")
+            print("    或人工审查 opt/output/discovery.json 的结构性提案。")
+            print("=" * 60)
+            print("继续运行本轮 pipeline...（如需中止请 Ctrl+C）\n")
+
     run_id = datetime.now().strftime("v%Y%m%d_%H%M%S")
 
     print("DayTradeSelfOptAgent SkillOpt Pipeline")

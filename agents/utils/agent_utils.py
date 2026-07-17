@@ -703,6 +703,7 @@ def hard_filter_stock(symbol: str, config: dict = None) -> tuple:
         return (False, "停牌: 成交额为0")
 
     # c. 跌停 — price == limit_down（均 > 0）
+    # A股最小变动0.01元，0.001容差等价于严格相等（避免浮点精度问题）
     if price > 0 and limit_down > 0 and abs(price - limit_down) < 0.001:
         return (False, f"跌停: price={price} limit_down={limit_down}")
 

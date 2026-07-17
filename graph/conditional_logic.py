@@ -83,25 +83,24 @@ class ConditionalLogic:
             return "reversal_analyst"
 
         # current_response 来自最后一条AI消息
+        # M2: content=None 时 last_ai 为空会导致 if last_ai: 为 False，
+        # Bull/Bear 路由及 count%2 兜底被整体跳过，直接落到末尾 "bull_researcher"
+        # 造成 bull 连续发言。改为始终执行 startswith 判断 + count%2 兜底。
         messages = state.get("messages", [])
-        if messages:
-            last_ai = None
-            for m in reversed(messages):
-                if hasattr(m, "type") and m.type == "ai":
-                    last_ai = m.content if hasattr(m, "content") else ""
-                    break
+        last_ai = ""
+        for m in reversed(messages):
+            if hasattr(m, "type") and m.type == "ai":
+                last_ai = str(m.content) if getattr(m, "content", None) else ""
+                break
 
-            if last_ai:
-                last_str = str(last_ai)
-                if last_str.startswith("Bull:"):
-                    return "bear_researcher"
-                elif last_str.startswith("Bear:"):
-                    return "bull_researcher"
-                # M3: 兜底 — 用 count 判断下一个该谁发言，避免返回不在映射中的值导致 KeyError
-                # count 为已发言数；count%2==1 表示 Bull 刚说完→下一个是 Bear；count%2==0 表示 Bear 刚说完→下一个是 Bull
-                return "bull_researcher" if count % 2 == 0 else "bear_researcher"
-        # 无消息时默认进入 Bull
-        return "bull_researcher"
+        if last_ai.startswith("Bull:"):
+            return "bear_researcher"
+        elif last_ai.startswith("Bear:"):
+            return "bull_researcher"
+        # M3: 兜底 — 用 count 判断下一个该谁发言，避免返回不在映射中的值导致 KeyError
+        # count 为已发言数；count%2==1 表示 Bull 刚说完→下一个是 Bear；count%2==0 表示 Bear 刚说完→下一个是 Bull
+        # 无消息时 count=0 → count%2==0 → bull_researcher（与原默认行为一致）
+        return "bull_researcher" if count % 2 == 0 else "bear_researcher"
 
     # ============================================================
     # 风险辩论路由

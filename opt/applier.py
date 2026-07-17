@@ -19,6 +19,7 @@ import shutil
 from datetime import datetime
 from pathlib import Path
 from typing import List
+from uuid import uuid4
 
 PROJECT_DIR = Path(__file__).parent.parent
 SKILLS_DIR = PROJECT_DIR / "skills"
@@ -28,7 +29,8 @@ SNAPSHOT_DIR = PROJECT_DIR / "opt" / "snapshots"
 
 def backup_skills():
     """备份当前所有 skill 文件到 snapshots/"""
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    # L3: 加 uuid4 后缀避免秒级时间戳在并发/快速连续调用时覆盖
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S") + "_" + uuid4().hex[:6]
     backup_dir = SNAPSHOT_DIR / timestamp
     backup_dir.mkdir(parents=True, exist_ok=True)
     for sf in SKILLS_DIR.glob("*.skill.md"):
@@ -40,6 +42,9 @@ def backup_skills():
 
 def restore_skills(backup_dir) -> int:
     """从 snapshots/ 目录回滚所有 skill 文件。
+
+    Warning: restore overwrites ALL skill files, including those manually
+    modified after backup.
 
     Args:
         backup_dir: backup_skills() 返回的 Path 或字符串
@@ -214,6 +219,8 @@ def apply_edit_to_content(content: str, edit: dict) -> str:
                 if action == "delete":
                     continue  # skip this line
                 else:  # replace
+                    # L8: dict REPLACE 语义 — 用匹配行(而非 new_text)的前缀，
+                    # 避免 anti 规则被 new_text 误改为 rule；new_text 仅作为正文
                     stripped = line.strip()
                     prefix = ""
                     for prefix_candidate in ["rule: ", "anti: "]:

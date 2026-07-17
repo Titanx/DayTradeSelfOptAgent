@@ -10,7 +10,7 @@
 rule: Day 0 盘后分析 → Day 1 开盘买入：如果决策是 Buy/Overweight
 rule: Day 2 收盘前强制平仓：持有仅 1 个交易日
 rule: 不做空：只有 Buy 和 Hold 两种实际选择
-rule: 单票仓位 ≤ 30%：风险分散
+rule: 单票仓位 ≤ 20%：风险分散
 
 ## rules
 <!-- SKILLOPT-EDITABLE -->

@@ -759,8 +759,8 @@ class MarketDataCache:
         deleted = {"market": 0, "opinion": 0, "stock": 0}
 
         # 1. market_cache：按文件修改时间清理
-        if self.market_cache_dir.exists():
-            for f in self.market_cache_dir.glob("*"):
+        if self.cache_dir.exists():
+            for f in self.cache_dir.glob("*"):
                 try:
                     mtime = datetime.fromtimestamp(f.stat().st_mtime)
                     if mtime < cutoff:

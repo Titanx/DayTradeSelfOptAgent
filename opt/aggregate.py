@@ -75,12 +75,20 @@ def _merge_edits(edits: List[dict]) -> dict:
         return edits[0]
 
     base = dict(edits[0])
-    merged_new = "；".join(sorted(set(e.get("new", "") for e in edits)))
+    action = base.get("action", "")
 
-    if len(merged_new) > 400:
-        merged_new = max((e.get("new", "") for e in edits), key=len)
+    if action == "replace":
+        # M6: replace 的 old/new 必须一一对应，不能拼接
+        # 合并多条 replace 时：old 取最长（最具体），new 取最长（最完整）
+        base["old"] = max((e.get("old", "") for e in edits), key=len)
+        base["new"] = max((e.get("new", "") for e in edits), key=len)
+    else:
+        # add: 可以拼接 new（add 无 old）
+        merged_new = "；".join(sorted(set(e.get("new", "") for e in edits)))
+        if len(merged_new) > 400:
+            merged_new = max((e.get("new", "") for e in edits), key=len)
+        base["new"] = merged_new
 
-    base["new"] = merged_new
     base["_merged_from"] = len(edits)
     return base
 
@@ -145,7 +153,8 @@ def aggregate(edits_data: dict, use_llm: bool = False) -> dict:
                     kw2 = _extract_sector_keywords(other_text)
                     kw_overlap = len(kw1 & kw2) > 0 if (kw1 and kw2) else False
 
-                    if overlap > 0.5 or kw_overlap:
+                    # M7: 关键词重叠需同时要求文本相似度达到最低阈值，避免同板块但意图相反的编辑误合并
+                    if overlap > 0.5 or (kw_overlap and overlap > 0.2):
                         similar_indices.append(i)
 
                 if similar_indices:

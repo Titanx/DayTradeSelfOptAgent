@@ -115,12 +115,35 @@ def _is_section_editable(content: str, section_name: str) -> bool:
 _MIN_OLD_TEXT_LEN = 10
 
 
+def _find_section_range(lines: List[str], section_name: str):
+    """定位 section 的行范围 [start, end)，返回 (start, end) 或 None。
+
+    start: section header 的下一行
+    end:   下一个 ## header 的行号（或文件末尾）
+    """
+    section_header = "## " + section_name
+    start = None
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        if start is None:
+            if stripped == section_header:
+                start = i + 1
+        else:
+            # 遇到下一个 ## header 即结束
+            if stripped.startswith("## "):
+                return (start, i)
+    if start is not None:
+        return (start, len(lines))
+    return None
+
+
 def apply_edit_to_content(content: str, edit: dict) -> str:
     """对 skill 文件内容应用单条编辑，返回新内容。
 
     安全校验：
     1. 只允许编辑带 SKILLOPT-EDITABLE 标记的 section（策略铁律等不可改）
     2. delete/replace 的 old 文本必须 ≥ _MIN_OLD_TEXT_LEN 字符，避免误删
+    3. delete/replace 只在目标 section 行范围内操作，不会误伤其他 section（含 strategy_iron_rules）
     """
     action = edit["action"]
     section_name = edit["section"]
@@ -177,38 +200,40 @@ def apply_edit_to_content(content: str, edit: dict) -> str:
         lines.insert(target_line + 1, original_prefix + new_rule)
         return "\n".join(lines)
 
-    elif action == "delete":
+    elif action in ("delete", "replace"):
         old_text = edit.get("old", "").strip()
         if len(old_text) < _MIN_OLD_TEXT_LEN:
-            print("  ⚠️ 跳过 delete：old 文本过短 ({}<{})，可能误删多行".format(
-                len(old_text), _MIN_OLD_TEXT_LEN))
+            print("  ⚠️ 跳过 {}: old 文本过短 ({}<{})，可能误伤多行".format(
+                action, len(old_text), _MIN_OLD_TEXT_LEN))
             return content
-        new_lines = []
-        for line in lines:
-            stripped = line.strip()
-            if old_text and old_text in stripped:
-                continue  # skip this line
-            new_lines.append(line)
-        return "\n".join(new_lines)
 
-    elif action == "replace":
-        old_text = edit.get("old", "").strip()
-        new_text = edit.get("new", "").strip()
-        if len(old_text) < _MIN_OLD_TEXT_LEN:
-            print("  ⚠️ 跳过 replace：old 文本过短 ({}<{})，可能误改多行".format(
-                len(old_text), _MIN_OLD_TEXT_LEN))
+        # C2: 限定在目标 section 行范围内操作，避免误伤其他 section（如 strategy_iron_rules）
+        section_range = _find_section_range(lines, section_name)
+        if section_range is None:
+            print("  ⚠️ 跳过：未找到 section '{}' 的行范围".format(section_name))
             return content
+        sec_start, sec_end = section_range
+
+        new_text = edit.get("new", "").strip() if action == "replace" else ""
+
         new_lines = []
-        for line in lines:
+        for i, line in enumerate(lines):
+            # 不在 section 范围内的行原样保留
+            if i < sec_start or i >= sec_end:
+                new_lines.append(line)
+                continue
             stripped = line.strip()
             if old_text and old_text in stripped:
-                # 保持前缀格式
-                prefix = ""
-                for prefix_candidate in ["rule: ", "anti: "]:
-                    if line.strip().startswith(prefix_candidate):
-                        prefix = prefix_candidate
-                        break
-                new_lines.append(prefix + new_text)
+                if action == "delete":
+                    continue  # skip this line
+                else:  # replace
+                    # 保持前缀格式
+                    prefix = ""
+                    for prefix_candidate in ["rule: ", "anti: "]:
+                        if line.strip().startswith(prefix_candidate):
+                            prefix = prefix_candidate
+                            break
+                    new_lines.append(prefix + new_text)
             else:
                 new_lines.append(line)
         return "\n".join(new_lines)

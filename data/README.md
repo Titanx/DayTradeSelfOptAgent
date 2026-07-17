@@ -43,7 +43,7 @@ data/
 - `{date}_get_stock_price_data.{md,cache.json}` — 日线K线
 - `{date}_get_stock_realtime_quote.{md,cache.json}` — 实时行情
 - `{date}_get_stock_financials.{md,cache.json}` — 财务指标
-- `{date}_price_daily_{day}.{md,cache.json}` — 30天日线
+- `price_daily_{date}.{md,cache.json}` — 30天日线
 
 ### market_cache/
 公共市场数据，按日期:

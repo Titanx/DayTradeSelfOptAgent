@@ -9,7 +9,8 @@
 3. 按 sector + error_type 分组，生成 group_summary
 4. 输出 JSON 供 Optimizer LLM 分析
 
-策略对齐 (与 README + batch_backtest.py 一致):
+策略对齐 (与 README + scripts/batch_backtest.py 一致, 两者均为两日策略):
+  注: scripts/backtest_multiday.py 为已废弃的旧版单日策略，请勿参考
   Day0(决策日)收盘分析 → Day1 开盘买入 → Day2 止盈/止损/收盘平仓
     HIT   = 看多 + Day2 日内最高 ≥ 买价+1%  → 止盈平仓
     STOP  = 看多 + Day2 日内最低 ≤ 买价-3%  → 止损平仓
@@ -65,13 +66,13 @@ def load_prediction(code, trade_date):
 
 
 def get_kline(sid):
-    """拉取 K 线数据（12 天窗口，确保历史日期回测能取到正确 K 线）。
+    """拉取 K 线数据（30 天窗口，确保历史日期回测能取到正确 K 线，覆盖节假日）。
 
     返回 dict: {date_str: (open, close, high, low)}
     """
     url = (
         "http://web.ifzq.gtimg.cn/appstock/app/fqkline/get"
-        "?param={sid},day,,,12,qfq".format(sid=sid)
+        "?param={sid},day,,,30,qfq".format(sid=sid)
     )
     req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
     resp = urllib.request.urlopen(req, timeout=10)
@@ -103,10 +104,13 @@ def _classify(verdict_rating: str, d1_open: float, d2_high: float,
             flat_pct = (d2_close / d1_open - 1) * 100
             return "FLAT", round(flat_pct, 2)
     else:
-        # 观望：用 Day0 收盘 → Day2 最高 涨幅判断是否踏空
-        step_trig = (d2_high / d0_close - 1) * 100 >= TARGET_GAIN_PCT
+        # 观望：用 Day1 开盘（如当时按策略买入的价格）→ Day2 最高 涨幅判断是否踏空
+        # 基准与 HIT 一致，避免 Day1 跳空高/低开时 STEP 误报/漏报
+        if d1_open <= 0:
+            return "AVOID", 0.0
+        step_trig = (d2_high / d1_open - 1) * 100 >= TARGET_GAIN_PCT
         if step_trig:
-            return "STEP", round((d2_high / d0_close - 1) * 100, 2)
+            return "STEP", round((d2_high / d1_open - 1) * 100, 2)
         else:
             return "AVOID", 0.0
 
@@ -233,6 +237,7 @@ def collect(date_list: List[str]) -> dict:
     }
 
     for sector, s in by_sector.items():
+        # miss = stop + flat 已包含，total_s 不单独加 miss 避免重复计算
         total_s = s["hit"] + s["stop"] + s["flat"] + s["avoid"] + s["step"]
         correct_s = s["hit"] + s["avoid"]
         group_summary["by_sector"][sector] = {

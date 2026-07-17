@@ -127,7 +127,7 @@ def get_latest_trade_date() -> str:
                 if check_date in trade_calendar:
                     if now.weekday() < 5:
                         logger.warning(
-                            f"⚠️ 当前为盘中时段（未收盘），使用最近交易日数据: {check_date}（当日数据不完整）"
+                            f"⚠️ 当前非收盘状态（盘中或节假日），使用最近交易日数据: {check_date}"
                         )
                     return check_date
             # 日历中找不到，落到下面的兜底逻辑
@@ -407,6 +407,7 @@ def _normalize_realtime(data: dict, symbol: str) -> Dict[str, Any]:
     if "volume" in data and data["volume"]:
         volume = float(data["volume"] or 0)
     elif amount > 0 and price > 0:
+        # 近似值，盘中 price 偏离 VWAP 时有 5-10% 误差，仅用于停牌判断（volume==0）
         volume = amount / price
     else:
         volume = 0.0

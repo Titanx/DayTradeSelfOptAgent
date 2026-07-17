@@ -64,14 +64,17 @@ def gate(old_accuracy: float, new_accuracy: float,
                 old_accuracy, new_accuracy, delta),
         }
     else:
+        reason = "Accuracy {:.2f}% → {:.2f}% ({:+.2f}%) - no improvement".format(
+            old_accuracy, new_accuracy, delta)
+        if delta == 0:
+            reason += "（持平按拒绝处理，避免噪声波动）"
         result = {
             "accepted": False,
             "old_accuracy": old_accuracy,
             "new_accuracy": new_accuracy,
             "delta": round(delta, 2),
             "action": "REJECT",
-            "reason": "Accuracy {:.2f}% → {:.2f}% ({:+.2f}%) - no improvement".format(
-                old_accuracy, new_accuracy, delta),
+            "reason": reason,
         }
 
         # 写入 rejected buffer

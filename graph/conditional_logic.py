@@ -92,7 +92,7 @@ class ConditionalLogic:
                 elif last_str.startswith("Bear:"):
                     return "bull_researcher"
                 # M3: 兜底 — 用 count 判断下一个该谁发言，避免返回不在映射中的值导致 KeyError
-                # count 为偶数（含0）→ Bull 先发言；count 为奇数 → Bear 接着发言
+                # count 为已发言数；count%2==1 表示 Bull 刚说完→下一个是 Bear；count%2==0 表示 Bear 刚说完→下一个是 Bull
                 return "bull_researcher" if count % 2 == 0 else "bear_researcher"
         # 无消息时默认进入 Bull
         return "bull_researcher"
@@ -126,6 +126,12 @@ class ConditionalLogic:
             return "neutral_risk"
         elif last_content.startswith("Neutral:"):
             return "aggressive_risk"
-        else:
-            # Aggressive 发言后 → 轮到 Conservative
+        elif last_content.startswith("Aggressive:"):
             return "conservative_risk"
+        else:
+            # M4: 兜底用 count%3 推断下一个发言者（与 should_continue_debate 对称）
+            # count 在节点内已 +1: count%3==1 → Aggressive刚说完→Conservative;
+            #                    count%3==2 → Conservative刚说完→Neutral;
+            #                    count%3==0 → Neutral刚说完→Aggressive
+            idx = count % 3
+            return ["aggressive_risk", "conservative_risk", "neutral_risk"][idx]

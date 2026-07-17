@@ -141,7 +141,7 @@ def build_user_message(rollout_data: dict) -> str:
                 rating=c["rating"], conf=c["confidence"], chg=c["actual_chg"]
             )
 
-    msg += "\n## Current Skill Files (SKILLOPT-EDITABLE regions only)\n\n"
+    msg += "\n## Current Skill Files (full content for optimizer context)\n\n"
     skill_files = rollout_data.get("skill_files", {})
     # M9: 发送所有 skill 文件（不只5个），并放宽截断到 10000 字符
     # 之前只发 5 个核心文件 + 每个截断 3000 字符，会丢失关键上下文

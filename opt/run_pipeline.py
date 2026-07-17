@@ -270,7 +270,17 @@ def main():
                 print("  ✅ Rolled back {} skill files".format(restored))
                 # 清除 last_run 避免重复回滚
                 _save_last_run({})
-                record_run(run_id, rollout_data, applied=False)
+                # M5: 回滚后 skill 已恢复到 apply 前 baseline，应记录 old_acc（而非劣化后的 new_acc）
+                # 避免污染 evolve 的收敛检测（否则会把劣化值当成"该轮真实表现"）
+                rollback_rollout = dict(rollout_data)
+                rollback_rollout["group_summary"] = rollout_data.get("group_summary", {})
+                rollback_rollout["group_summary"]["overall"] = {
+                    **rollout_data.get("group_summary", {}).get("overall", {}),
+                    "accuracy": old_acc,
+                    "rolled_back": True,
+                    "rolled_back_from": new_acc,
+                }
+                record_run(run_id, rollback_rollout, applied=False)
                 print("Pipeline stopped after rollback. Please re-run to optimize from restored baseline.")
                 return
             else:

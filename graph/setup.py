@@ -123,6 +123,7 @@ class GraphSetup:
             sector_context: Optional[str]      # EvoSkill v0.2: 板块特定上下文
             data_context: Optional[str]        # Phase 0: 预计算的完整数据 (解耦数据获取)
             global_macro_report: Optional[str] # EvoSkill v0.4: 全球宏观分析 (美股/港股/VIX/汇率/商品)
+            trader_proposal: Optional[str]     # H4: 交易员提案文本，供风控/PM 直接读取，避免误抓辩论消息
 
         workflow = StateGraph(AgentState)
 
@@ -407,13 +408,16 @@ class GraphSetup:
                     proposal = llm_structured.invoke(messages)
                     from agents.schemas import render_trader_proposal
                     proposal_text = render_trader_proposal(proposal)
-                    return {"messages": [AIMessage(content=proposal_text)]}
+                    # H4: 同步写入 state.trader_proposal，避免风控/PM 误抓辩论消息
+                    return {"messages": [AIMessage(content=proposal_text)], "trader_proposal": proposal_text}
                 except Exception as e:
                     logger.warning(f"Trader 结构化输出失败，回退到自由文本: {e}")
 
             # 回退：自由文本
             response = quick.invoke(messages)
-            return {"messages": [response]}
+            resp_text = str(response.content) if hasattr(response, "content") else ""
+            # H4: 自由文本也写入 trader_proposal（解决 L7：下游 keywords 匹配失败问题）
+            return {"messages": [response], "trader_proposal": resp_text}
         workflow.add_node("trader", trader_node)
 
         # ========================================================
@@ -614,10 +618,10 @@ class GraphSetup:
                 parts.append(f"\n{content}\n")
 
         parts.append("\n### 多空辩论记录\n")
-        # 取辩论阶段的消息
+        # 取辩论阶段的消息（M2: 改用 startswith 避免抓到引用对方观点的分析师消息）
         for m in state.get("messages", []):
             c = str(m.content) if hasattr(m, "content") else ""
-            if "Bull:" in c or "Bear:" in c:
+            if c.startswith("Bull:") or c.startswith("Bear:"):
                 parts.append(c + "\n")
 
         # 反弹分析师独立视角
@@ -710,19 +714,14 @@ class GraphSetup:
         parts.append("\n### 多空辩论记录\n")
         for m in state.get("messages", []):
             c = str(m.content) if hasattr(m, "content") else ""
-            if "Bull:" in c or "Bear:" in c:
+            if c.startswith("Bull:") or c.startswith("Bear:"):
                 parts.append(c + "\n")
 
-        # 交易员提案（结构化渲染后含 **Action**: / **Position**:）
-        trader_keywords = ["**Action**:", "**Position**:", "Action:", "Position:"]
-        trader_found = False
-        for m in state.get("messages", []):
-            c = str(m.content) if hasattr(m, "content") else ""
-            if any(k in c for k in trader_keywords):
-                parts.append(f"\n### 交易提案\n{c}")
-                trader_found = True
-                break
-        if not trader_found:
+        # 交易员提案 — H4: 优先读 state.trader_proposal（避免误抓辩论/分析师消息）
+        trader_proposal = state.get("trader_proposal", "")
+        if trader_proposal:
+            parts.append(f"\n### 交易提案\n{trader_proposal}")
+        else:
             parts.append("\n### 交易提案\n(交易员未产生明确提案)\n")
 
         # 同阶段前序风险分析师发言，让辩论真正成为"辩论"而非三连独立评估
@@ -785,30 +784,33 @@ class GraphSetup:
             if content:
                 parts.append(f"### {rpt_name}\n{content}\n")
 
-        # 多空辩论原文（与 _build_manager_context / _build_risk_context 一致）
+        # 多空辩论原文（M2: 改用 startswith 避免抓到 Reversal/Sector 引用对方观点的消息）
         parts.append("### 多空辩论记录\n")
         for m in state.get("messages", []):
             c = str(m.content) if hasattr(m, "content") else ""
-            if "Bull:" in c or "Bear:" in c:
+            if c.startswith("Bull:") or c.startswith("Bear:"):
                 parts.append(c + "\n")
 
-        # 交易员提案（结构化渲染后含 **Action**: / **Position**:）
-        trader_keywords = ["**Action**:", "**Position**:", "Action:", "Position:"]
-        trader_found = False
+        # M3: 反弹分析师 + 板块轮动分析师输出（与 _build_manager_context 对称，PM 也需看到）
+        parts.append("### 反弹/板块补充分析\n")
         for m in state.get("messages", []):
             c = str(m.content) if hasattr(m, "content") else ""
-            if any(k in c for k in trader_keywords):
-                parts.append(f"### 交易员提案\n{c}\n")
-                trader_found = True
-                break
-        if not trader_found:
+            if c.startswith("Reversal:") or c.startswith("Sector:") or c.startswith("Global:"):
+                parts.append(c + "\n")
+
+        # 交易员提案 — H4: 优先读 state.trader_proposal（避免误抓辩论/分析师消息）
+        trader_proposal = state.get("trader_proposal", "")
+        if trader_proposal:
+            parts.append(f"### 交易员提案\n{trader_proposal}\n")
+        else:
             parts.append("### 交易员提案\n(交易员未产生明确提案，请直接基于分析报告做决策)\n")
 
-        # 风险辩论
+        # 风险辩论（L1: 改用 startswith 避免互相引用时重复抓取）
         parts.append("### 风险辩论\n")
+        risk_prefixes = ("Aggressive:", "Conservative:", "Neutral:")
         for m in state.get("messages", []):
             c = str(m.content) if hasattr(m, "content") else ""
-            if any(p in c for p in ["Aggressive:", "Conservative:", "Neutral:"]):
+            if c.startswith(risk_prefixes):
                 parts.append(c + "\n")
 
         parts.append("\n请综合所有信息，做出最终投资决策。使用 PortfolioDecision schema。")

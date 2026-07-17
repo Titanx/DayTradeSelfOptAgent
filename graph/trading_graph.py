@@ -357,6 +357,29 @@ class AStockTradingGraph:
         # ========================================================
         self._settle_pending_returns(symbol, trade_date)
 
+        # M8: market_direction 惰性计算 — 若调用方未设置（main.py/batchanalyze.py 等入口），
+        # 则在此处自动计算，避免 Phase 1 分析师看不到市场方向闸门（M1 修复失效）
+        market_direction = self.config.get("market_direction", "")
+        if not market_direction:
+            try:
+                from scripts.batch_predict import compute_market_signal
+                overview = self.config.get("market_overview", "")
+                if not overview:
+                    # 惰性拉取大盘概览
+                    try:
+                        from dataflows.market_cache import MarketDataCache
+                        cache = MarketDataCache.get_instance()
+                        overview = cache.get_public_data("market_overview_{}".format(trade_date)) or ""
+                    except Exception:
+                        pass
+                if overview:
+                    market_direction = compute_market_signal(overview)
+                    if market_direction:
+                        self.config["market_direction"] = market_direction
+                        logger.info(f"market_direction 惰性计算: {market_direction[:80]}")
+            except Exception as e:
+                logger.debug(f"market_direction 惰性计算失败: {e}")
+
         # 初始状态
         initial_state = {
             "messages": [],
@@ -371,7 +394,7 @@ class AStockTradingGraph:
             "risk_debate_state": {"count": 0},
             "final_decision": "",
             "market_overview": self.config.get("market_overview", ""),
-            "market_direction": self.config.get("market_direction", ""),
+            "market_direction": market_direction or self.config.get("market_direction", ""),
             "sector_momentum": self.config.get("sector_momentum", ""),
             "sector_context": self.config.get("sector_context", ""),
             "data_context": self.config.get("data_context", ""),

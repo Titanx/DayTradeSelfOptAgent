@@ -99,7 +99,7 @@ class TraderProposal(BaseModel):
     position_pct: Optional[float] = Field(None, ge=0, le=0.2, description="仓位比例 (单股≤20%)")
     entry_signal: Optional[str] = Field(None, description="Day1入场信号条件")
     day1_upside_catalyst: Optional[str] = Field(None, description="看好Day1上涨≥1%的具体理由")
-    expected_gain_pct: Optional[float] = Field(None, ge=1.0, description="预期Day1涨幅%，策略底线≥1%")
+    expected_gain_pct: Optional[float] = Field(None, ge=1.0, description="预期持仓期（Day1开盘→Day2日内）涨幅%，策略底线≥1%")
     day2_forced_exit_note: str = Field(default="无论盈亏，Day2收盘前强制平仓", description="强制平仓说明")
     reasoning: str = Field(description="一日游交易逻辑（必须论证Day1涨幅≥1%的可行性）")
 

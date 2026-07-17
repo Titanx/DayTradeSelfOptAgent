@@ -178,7 +178,9 @@ def _load_trajectory_samples(max_samples: int = 10) -> List[Dict]:
             "trace_path": str(trace_json) if trace_json.exists() else str(trace_md),
         }
 
-        if verdict in ("MISS", "STEP"):
+        # H2: collector 生成的 verdict 为 HIT/STOP/FLAT/AVOID/STEP（MISS 仅是聚合标签，不是单 case verdict）
+        # 错误案例 = STOP(止损) + FLAT(看多但未止盈) + STEP(踏空)
+        if verdict in ("STOP", "FLAT", "STEP"):
             error_cases.append(entry)
         else:
             good_cases.append(entry)

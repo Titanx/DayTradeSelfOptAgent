@@ -17,7 +17,7 @@ def create_bull_researcher(llm, config: dict) -> dict:
         "name": "多头研究员",
         "system_prompt": get_system_prompt("bull_researcher"),
         "tools": [],
-        "structured_output": ResearchPlan,
+        "structured_output": ResearchPlan,  # TODO: 未启用结构化输出，保持自由文本以便前缀匹配
     }
 
 
@@ -28,7 +28,7 @@ def create_bear_researcher(llm, config: dict) -> dict:
         "name": "空头研究员",
         "system_prompt": get_system_prompt("bear_researcher"),
         "tools": [],
-        "structured_output": ResearchPlan,
+        "structured_output": ResearchPlan,  # TODO: 未启用结构化输出，保持自由文本以便前缀匹配
     }
 
 
@@ -54,7 +54,7 @@ def create_reversal_analyst(llm, config: dict) -> dict:
         "name": "反弹分析师",
         "system_prompt": get_system_prompt("reversal_analyst"),
         "tools": [],
-        "structured_output": ResearchPlan,
+        "structured_output": ResearchPlan,  # TODO: 未启用结构化输出，保持自由文本以便前缀匹配
     }
 
 
@@ -72,7 +72,7 @@ def create_sector_rotation_analyst(llm, config: dict) -> dict:
         "name": "板块轮动分析师",
         "system_prompt": get_system_prompt("sector_rotation_analyst"),
         "tools": [],
-        "structured_output": ResearchPlan,
+        "structured_output": ResearchPlan,  # TODO: 未启用结构化输出，保持自由文本以便前缀匹配
     }
 
 
@@ -90,5 +90,5 @@ def create_global_macro_analyst(llm, config: dict) -> dict:
         "name": "全球宏观分析师",
         "system_prompt": get_system_prompt("global_macro_analyst"),
         "tools": [],
-        "structured_output": ResearchPlan,
+        "structured_output": ResearchPlan,  # TODO: 未启用结构化输出，保持自由文本以便前缀匹配
     }

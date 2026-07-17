@@ -644,20 +644,25 @@ def hard_filter_stock(symbol: str, config: dict = None) -> tuple:
     except Exception as e:
         logger.debug(f"tencent_realtime 失败 [{symbol}]: {e}")
 
-    # 回退到 route_to_vendor（含 name/price/volume/amount，但无 limit_up/limit_down）
+    # 回退到 route_to_vendor → akshare_adapter.get_stock_realtime
+    # 该链路第一条回退是 eastmoney_realtime，会返回 limit_up/limit_down；
+    # 故需透传（新浪回退时为 None，由下方 limit_down==0 跳过跌停检查）
     if not data:
         try:
             from dataflows.interface import route_to_vendor
             rt = route_to_vendor("get_stock_realtime", symbol)
             if rt and rt.get("name"):
                 amount = float(rt.get("amount", 0) or 0)
+                volume = rt.get("volume", 0)
+                # rt["amount"] 已是元，转回 amount_wan 与腾讯路径一致
                 data = {
                     "name": rt.get("name", ""),
                     "price": rt.get("price", 0),
-                    "volume": rt.get("volume", 0),
+                    "volume": volume,
                     "amount_wan": amount / 10000,
-                    "limit_up": None,
-                    "limit_down": None,
+                    # H5: 透传 limit_up/limit_down，跌停保护生效依赖此字段
+                    "limit_up": rt.get("limit_up"),
+                    "limit_down": rt.get("limit_down"),
                 }
         except Exception as e:
             logger.debug(f"route_to_vendor get_stock_realtime 失败 [{symbol}]: {e}")
@@ -888,9 +893,15 @@ def get_global_macro_data() -> str:
 
     result = "\n".join(lines)
 
-    # --- 缓存 ---
+    # --- 缓存（M10: 美股盘中时不写磁盘，仅写内存，避免跨日返回过时盘中快照）---
     try:
-        cache.store_public_data(cache_key, result)
+        us_status = _detect_us_session().get("status", "closed")
+        if us_status == "in_session":
+            # 仅写内存，不写磁盘（收盘后下次调用会重新拉取并缓存）
+            cache._memory[cache_key] = result
+            logger.debug("global_macro 美股盘中，仅写内存缓存")
+        else:
+            cache.store_public_data(cache_key, result)
     except Exception:
         pass
 
@@ -903,31 +914,37 @@ def _detect_us_session() -> dict:
     美东时间 9:30-16:00 = 北京时间 21:30-04:00 (夏令时, 3月第二周日-11月第一周日)
                         = 北京时间 22:30-05:00 (冬令时)
 
+    M9: 使用 zoneinfo 精确判断夏令时（替代月份近似，消除过渡期最多14天偏差）
+
     Returns:
         {"status": "in_session" | "pre_market" | "closed", "note": str}
     """
-    now_bj = datetime.now()
-    hour = now_bj.hour
-    month = now_bj.month
+    try:
+        # Python 3.9+ 自带 zoneinfo
+        from zoneinfo import ZoneInfo
+        us_now = datetime.now(ZoneInfo("America/New_York"))
+        is_dst = us_now.dst() is not None
+        us_hour = us_now.hour
+        us_minute = us_now.minute
+    except Exception:
+        # 回退到月份近似（zoneinfo 不可用时）
+        now_bj = datetime.now()
+        is_dst = 3 <= now_bj.month <= 11
+        # 简化：假设美东时间 = 北京时间 -12（夏令时）或 -13（冬令时）
+        offset_hours = 12 if is_dst else 13
+        us_total_min = (now_bj.hour - offset_hours) * 60 + now_bj.minute
+        us_hour = (us_total_min // 60) % 24
+        us_minute = us_total_min % 60
 
-    # 简化夏令时判断：3-11月为夏令时，12-2月为冬令时
-    is_dst = 3 <= month <= 11
+    # 美东时间 9:30-16:00 为盘中
+    in_session = (us_hour > 9 or (us_hour == 9 and us_minute >= 30)) and us_hour < 16
 
-    if is_dst:
-        # 夏令时：21:30-04:00 (跨日)
-        if hour >= 21 or hour < 4:
-            return {"status": "in_session", "note": "夏令时盘中"}
-        elif 4 <= hour < 21:
-            # 4:00-9:30 美东盘前，9:30-21:30 美东盘后
-            return {"status": "closed", "note": "夏令时收盘后"}
+    if in_session:
+        return {"status": "in_session", "note": "夏令时盘中" if is_dst else "冬令时盘中"}
+    elif us_hour < 9 or (us_hour == 9 and us_minute < 30):
+        return {"status": "pre_market", "note": "夏令时盘前" if is_dst else "冬令时盘前"}
     else:
-        # 冬令时：22:30-05:00 (跨日)
-        if hour >= 22 or hour < 5:
-            return {"status": "in_session", "note": "冬令时盘中"}
-        else:
-            return {"status": "closed", "note": "冬令时收盘后"}
-
-    return {"status": "pre_market", "note": "盘前"}
+        return {"status": "closed", "note": "夏令时收盘后" if is_dst else "冬令时收盘后"}
 
 
 def _fetch_us_index(ak, code: str, name: str) -> Optional[str]:

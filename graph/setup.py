@@ -290,10 +290,11 @@ class GraphSetup:
             cfg = create_reversal_analyst(deep, self.config)
             context = self._build_debate_context(state)
             # 注入 Bull/Bear 辩论摘要
+            # M2: 改用 startswith 避免抓到引用对方观点的分析师消息
             debate_summary = []
             for m in state.get("messages", []):
                 c = str(m.content)
-                if "Bull:" in c or "Bear:" in c:
+                if c.startswith("Bull:") or c.startswith("Bear:"):
                     debate_summary.append(c[-600:])
             if debate_summary:
                 context += "\n## 多空辩论摘要\n" + "\n".join(debate_summary[-4:])
@@ -344,10 +345,11 @@ class GraphSetup:
                 context += "\n\n## 全球市场数据\n{}".format(data_context)
 
             # 注入前序研究员结论摘要
+            # M2: 改用 startswith 避免抓到引用对方观点的分析师消息
             summary_parts = []
             for m in state.get("messages", []):
                 c = str(m.content)
-                if any(p in c for p in ["Bull:", "Bear:", "Reversal:", "Sector:"]):
+                if c.startswith(("Bull:", "Bear:", "Reversal:", "Sector:")):
                     summary_parts.append(c[-500:])
             if summary_parts:
                 context += "\n\n## 前序分析摘要\n" + "\n".join(summary_parts[-5:])
@@ -385,7 +387,11 @@ class GraphSetup:
                     logger.warning(f"RM 结构化输出失败，回退到自由文本: {e}")
 
             # 回退：自由文本
-            response = deep.invoke(messages)
+            try:
+                response = deep.invoke(messages)
+            except Exception as e:
+                logger.warning(f"节点异常: {e}")
+                return {"messages": [AIMessage(content="(研究主管节点异常，跳过)")]}
             return {"messages": [response]}
         workflow.add_node("research_manager", research_manager_node)
 
@@ -414,8 +420,16 @@ class GraphSetup:
                     logger.warning(f"Trader 结构化输出失败，回退到自由文本: {e}")
 
             # 回退：自由文本
-            response = quick.invoke(messages)
-            resp_text = str(response.content) if hasattr(response, "content") else ""
+            try:
+                response = quick.invoke(messages)
+            except Exception as e:
+                logger.warning(f"节点异常: {e}")
+                return {"messages": [AIMessage(content="(交易员节点异常，跳过)")], "trader_proposal": "(交易员节点异常，跳过)"}
+            # L3: response.content 可能是 list（部分 LLM 返回多段内容），统一拍平为字符串
+            content = response.content if hasattr(response, "content") else ""
+            if isinstance(content, list):
+                content = "".join(str(x) for x in content)
+            resp_text = str(content) if content else ""
             # H4: 自由文本也写入 trader_proposal（解决 L7：下游 keywords 匹配失败问题）
             return {"messages": [response], "trader_proposal": resp_text}
         workflow.add_node("trader", trader_node)
@@ -474,10 +488,19 @@ class GraphSetup:
                     logger.warning(f"结构化输出失败，回退到自由文本: {e}")
 
             # 回退：无 schema 时使用自由文本
-            response = deep.invoke(messages)
+            try:
+                response = deep.invoke(messages)
+            except Exception as e:
+                logger.warning(f"节点异常: {e}")
+                return {"messages": [AIMessage(content="(PM节点异常，跳过)")], "final_decision": "Hold"}
+            # L3: response.content 可能是 list（部分 LLM 返回多段内容），统一拍平为字符串
+            content = response.content if hasattr(response, "content") else ""
+            if isinstance(content, list):
+                content = "".join(str(x) for x in content)
+            decision_text = str(content) if content else "Hold"
             return {
                 "messages": [response],
-                "final_decision": str(response.content),
+                "final_decision": decision_text,
             }
         workflow.add_node("portfolio_manager", portfolio_manager_node)
 
@@ -668,6 +691,8 @@ class GraphSetup:
         ]
         # M2: Trader 是 RM 之后第一个发言的节点，直接取最后一条 AI 消息即 RM 输出，
         # 避免关键字匹配误判前序分析师报告（如分析师报告中也可能出现 "研究计划"）。
+        # H4: 无论最后一条 AI 消息是否非空，都只看这一条（加 break），
+        # 避免 RM 回退自由文本为空时误抓前序 GlobalMacro 输出
         rm_found = False
         for m in reversed(state.get("messages", [])):
             if hasattr(m, "type") and m.type == "ai":
@@ -675,7 +700,7 @@ class GraphSetup:
                 if c.strip():
                     parts.append(c)
                     rm_found = True
-                    break
+                break  # 只看最后一条 AI 消息，不继续往前找
         if not rm_found:
             parts.append("(研究主管未产生研究计划，请基于宏观与市场数据谨慎决策)\n")
 
@@ -792,10 +817,12 @@ class GraphSetup:
                 parts.append(c + "\n")
 
         # M3: 反弹分析师 + 板块轮动分析师输出（与 _build_manager_context 对称，PM 也需看到）
+        # H3: 不抽取 Global: 前缀消息，因为全球宏观已通过 state.global_macro_report 注入（line 768-774），
+        # 重复注入会导致 PM 过度权重宏观信号
         parts.append("### 反弹/板块补充分析\n")
         for m in state.get("messages", []):
             c = str(m.content) if hasattr(m, "content") else ""
-            if c.startswith("Reversal:") or c.startswith("Sector:") or c.startswith("Global:"):
+            if c.startswith("Reversal:") or c.startswith("Sector:"):
                 parts.append(c + "\n")
 
         # 交易员提案 — H4: 优先读 state.trader_proposal（避免误抓辩论/分析师消息）

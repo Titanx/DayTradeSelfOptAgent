@@ -88,6 +88,9 @@ def record_run(run_id: str, rollout_data: dict, edits_data: dict = None,
         "total_samples": overall.get("total", 0),
         "edits_proposed": len(edits_data.get("edits", [])) if edits_data else 0,
         "edits_applied": applied,
+        # M5: 透传 rolled_back 标记，让 detect_convergence / discover 能识别回滚记录
+        "rolled_back": overall.get("rolled_back", False),
+        "rolled_back_from": overall.get("rolled_back_from"),
     }
 
     if gate_result:
@@ -180,12 +183,27 @@ def _load_trajectory_samples(max_samples: int = 10) -> List[Dict]:
 
         # H2: collector 生成的 verdict 为 HIT/STOP/FLAT/AVOID/STEP（MISS 仅是聚合标签，不是单 case verdict）
         # 错误案例 = STOP(止损) + FLAT(看多但未止盈) + STEP(踏空)
+        # 注: good_cases 包含 HIT(正确买入)和 AVOID(正确回避)两类；
+        #     实际运行中 error_cases 通常远超 max_samples，good_cases 几乎不会被采样
+        #     （仅在 error_cases 不足 max_samples 时作为剩余填充）。
         if verdict in ("STOP", "FLAT", "STEP"):
             error_cases.append(entry)
         else:
             good_cases.append(entry)
 
-    samples = error_cases[:max_samples]
+    # M3: 分层采样，保证 STOP/FLAT/STEP 三类错误都有代表性，避免按顺序取前 N 个导致某类丢失
+    from collections import defaultdict
+    by_type = defaultdict(list)
+    for e in error_cases:
+        by_type[e.get("verdict", "")].append(e)
+
+    samples = []
+    # 轮转取，保证每类至少 1 个（如有），直到填满 max_samples
+    while len(samples) < max_samples and any(by_type.values()):
+        for v in ("STOP", "FLAT", "STEP"):
+            if by_type[v] and len(samples) < max_samples:
+                samples.append(by_type[v].pop(0))
+
     remaining = max_samples - len(samples)
     if remaining > 0:
         samples += good_cases[:remaining]

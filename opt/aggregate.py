@@ -80,6 +80,8 @@ def _merge_edits(edits: List[dict]) -> dict:
     if action == "replace":
         # M6: replace 的 old/new 必须一一对应，不能拼接
         # 合并多条 replace 时：old 取最长（最具体），new 取最长（最完整）
+        # 注: 取较长 new 是任意启发式，可能丢失更精准的较短改法；
+        #     如需更稳健合并，可改为 LLM 辅助 (_llm_merge) 或人工 review。
         base["old"] = max((e.get("old", "") for e in edits), key=len)
         base["new"] = max((e.get("new", "") for e in edits), key=len)
     else:

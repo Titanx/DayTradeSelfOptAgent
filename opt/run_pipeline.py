@@ -272,15 +272,24 @@ def main():
                 _save_last_run({})
                 # M5: 回滚后 skill 已恢复到 apply 前 baseline，应记录 old_acc（而非劣化后的 new_acc）
                 # 避免污染 evolve 的收敛检测（否则会把劣化值当成"该轮真实表现"）
-                rollback_rollout = dict(rollout_data)
-                rollback_rollout["group_summary"] = rollout_data.get("group_summary", {})
-                rollback_rollout["group_summary"]["overall"] = {
-                    **rollout_data.get("group_summary", {}).get("overall", {}),
-                    "accuracy": old_acc,
-                    "rolled_back": True,
-                    "rolled_back_from": new_acc,
+                # M4: hit/miss/step 等字段也置为 0（回滚后这些劣化数据不再代表真实表现），
+                # 避免discover()的LLM prompt展示"accuracy=70%但HIT只有12/20=60%"的矛盾数据
+                rollback_rollout = {
+                    "group_summary": {
+                        "overall": {
+                            "accuracy": old_acc,
+                            "hit": 0,
+                            "avoid": 0,
+                            "miss": 0,
+                            "step": 0,
+                            "total": 0,
+                            "rolled_back": True,
+                            "rolled_back_from": new_acc,
+                        }
+                    }
                 }
-                record_run(run_id, rollback_rollout, applied=False)
+                # M5: 补传 gate_result，让 history entry 记录 gate 对比信息
+                record_run(run_id, rollback_rollout, applied=False, gate_result=gate_result)
                 print("Pipeline stopped after rollback. Please re-run to optimize from restored baseline.")
                 return
             else:

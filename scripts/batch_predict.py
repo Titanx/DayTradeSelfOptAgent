@@ -497,6 +497,11 @@ def main():
 
     # 仓位归一化：Buy/Overweight 的 position_pct 等比压缩至总仓 ≤ 100%
     max_pos = config.get("max_position_pct", 0.2)
+    # M2: 先给 Buy 项无 position 的补默认值（原 elif 分支因 truthy 过滤永远进不去）
+    for r in all_results:
+        if r["rating"] in ("Buy", "Overweight") and r.get("position_pct") is None:
+            r["position_pct"] = max_pos
+
     buy_items = [r for r in all_results if r["rating"] in ("Buy", "Overweight") and r.get("position_pct")]
     total_raw = sum(r["position_pct"] for r in buy_items)
     if total_raw > 1.0:
@@ -505,11 +510,6 @@ def main():
         for r in buy_items:
             r["position_pct"] = round(r["position_pct"] * scale, 4)
         print(f"\n📐 仓位归一化: 原始总仓 {total_raw:.0%} > 100%，等比压缩至 100%")
-    elif buy_items:
-        for r in buy_items:
-            if r.get("position_pct") is None:
-                # Buy 但未给出仓位 → 默认分配 max_pos
-                r["position_pct"] = max_pos
 
     for rating in ["Buy", "Overweight", "Hold", "Underweight", "Sell", "ERR"]:
         if by_rating[rating]:

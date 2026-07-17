@@ -12,11 +12,12 @@
 策略对齐 (与 README + scripts/batch_backtest.py 一致, 两者均为两日策略):
   注: scripts/backtest_multiday.py 为已废弃的旧版单日策略，请勿参考
   Day0(决策日)收盘分析 → Day1 开盘买入 → Day2 止盈/止损/收盘平仓
-    HIT   = 看多 + Day2 日内最高 ≥ 买价+1%  → 止盈平仓
-    STOP  = 看多 + Day2 日内最低 ≤ 买价-3%  → 止损平仓
-    FLAT  = 看多 + 未触发止盈/止损           → Day2 收盘强制平仓
-    AVOID = 观望 + 实际未涨                  → 正确回避
-    STEP  = 观望 + 实际上涨 ≥1%              → 踏空
+  买价基准 = Day1 开盘价 (d1_open)，HIT/STEP 均以此为准，避免 Day1 跳空误报
+    HIT   = 看多 + Day2 日内最高 ≥ d1_open+1%  → 止盈平仓
+    STOP  = 看多 + Day2 日内最低 ≤ d1_open-3%  → 止损平仓
+    FLAT  = 看多 + 未触发止盈/止损              → Day2 收盘强制平仓
+    AVOID = 观望 + Day2 最高未达 d1_open+1%    → 正确回避
+    STEP  = 观望 + Day2 最高 ≥ d1_open+1%      → 踏空 (基准与 HIT 一致)
 """
 
 import json
@@ -83,10 +84,11 @@ def get_kline(sid):
 
 
 def _classify(verdict_rating: str, d1_open: float, d2_high: float,
-              d2_low: float, d2_close: float, d0_close: float) -> tuple:
+              d2_low: float, d2_close: float) -> tuple:
     """按一日游策略分类，返回 (verdict, actual_return_pct)。
 
     actual_return_pct 是模拟止盈止损后的实际收益，非收盘价差。
+    M1: 删除 d0_close 参数（H1 修复后 STEP 改用 d1_open，d0_close 不再使用）
     """
     is_bull = verdict_rating in ("Buy", "Overweight")
     hit_price = d1_open * (1 + TARGET_GAIN_PCT / 100.0)   # +1% 止盈
@@ -174,14 +176,13 @@ def collect(date_list: List[str]) -> dict:
             d1_date = sorted_dates[d0_idx + 1]
             d2_date = sorted_dates[d0_idx + 2]
 
-            d0_close = klines[trade_date][1]
             d1_open = klines[d1_date][0]        # Day1 开盘 = 买入价
             d2_high = klines[d2_date][2]        # Day2 日内最高
             d2_low = klines[d2_date][3]         # Day2 日内最低
             d2_close = klines[d2_date][1]       # Day2 收盘
 
             verdict, actual_return_pct = _classify(
-                pred["rating"], d1_open, d2_high, d2_low, d2_close, d0_close
+                pred["rating"], d1_open, d2_high, d2_low, d2_close
             )
 
             # MISS 兼容旧标签：看多但未 HIT 的（STOP/FLAT）在 optimizer 语境里都是"错误信号"
@@ -281,8 +282,16 @@ def main():
         print("No analysis data found in results/")
         return
 
-    # 训练集: 最近 3 个日期 (或全部)
-    train_dates = sorted_dates[-3:] if len(sorted_dates) >= 3 else sorted_dates
+    # 训练集: 取倒数第3-5天（保证至少3天可处理，避免最近2天因K线不足被跳过）
+    # L6: 若取 sorted_dates[-3:]，最近2天的 Day1/Day2 K线可能尚未生成，
+    #     collect() 内部会因 d0_idx+2>=len 而 continue 跳过，导致样本不足。
+    #     改为取 [-5:-2]（倒数第3-5天），这3天都有完整的后续2天K线。
+    if len(sorted_dates) >= 5:
+        train_dates = sorted_dates[-5:-2]
+    elif len(sorted_dates) >= 3:
+        train_dates = sorted_dates[-3:]
+    else:
+        train_dates = sorted_dates
     print("Collecting for train dates: {}".format(train_dates))
 
     data = collect(train_dates)

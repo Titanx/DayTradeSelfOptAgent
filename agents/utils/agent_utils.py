@@ -893,15 +893,15 @@ def get_global_macro_data() -> str:
 
     result = "\n".join(lines)
 
-    # --- 缓存（M10: 美股盘中时不写磁盘，仅写内存，避免跨日返回过时盘中快照）---
+    # --- 缓存（H6: 美股盘中不缓存，避免收盘后仍返回盘中快照）---
+    # 之前 M10 修复盘中仅写内存，但 get_public_data 读取时优先返回内存，
+    # 导致同一 A 股交易日内美股从盘中转为收盘后，仍命中内存中的盘中快照。
+    # 正确做法：盘中不写任何缓存，每次调用都重新拉取；收盘后才写内存+磁盘。
     try:
         us_status = _detect_us_session().get("status", "closed")
-        if us_status == "in_session":
-            # 仅写内存，不写磁盘（收盘后下次调用会重新拉取并缓存）
-            cache._memory[cache_key] = result
-            logger.debug("global_macro 美股盘中，仅写内存缓存")
-        else:
+        if us_status != "in_session":
             cache.store_public_data(cache_key, result)
+        # 盘中（in_session）不写任何缓存，下次调用会重新拉取
     except Exception:
         pass
 

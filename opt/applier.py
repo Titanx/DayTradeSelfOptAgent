@@ -18,7 +18,7 @@ import json
 import shutil
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List
+from typing import List
 
 PROJECT_DIR = Path(__file__).parent.parent
 SKILLS_DIR = PROJECT_DIR / "skills"
@@ -61,32 +61,6 @@ def restore_skills(backup_dir) -> int:
     return count
 
 
-def parse_skill_sections(content: str) -> Dict[str, List[str]]:
-    """解析 skill 文件的 section → 行列表。只返回 SKILLOPT-EDITABLE 区域内的行。
-
-    SKILLOPT-EDITABLE 标记以 toggle 方式工作：第1次遇到开启可编辑区域，
-    第2次关闭，第3次再开启…… 成对标记能正确界定边界；单个标记则从该处
-    一直延伸到文件末尾。
-    """
-    sections = {}
-    current_section = None
-    in_editable = False
-    for line in content.split("\n"):
-        stripped = line.strip()
-        if stripped.startswith("## "):
-            current_section = stripped[3:].strip()
-            sections[current_section] = []
-            continue
-        if "SKILLOPT-EDITABLE" in line:
-            # toggle：成对标记的开/关
-            in_editable = not in_editable
-            continue
-        if in_editable:
-            if current_section:
-                sections[current_section].append(line)
-    return sections
-
-
 def _is_section_editable(content: str, section_name: str) -> bool:
     """检查指定 section 是否在 SKILLOPT-EDITABLE 标记之后（即可编辑）。
 
@@ -112,7 +86,8 @@ def _is_section_editable(content: str, section_name: str) -> bool:
 
 
 # 最小长度校验：delete/replace 的 old 文本太短会误删/误改大量行
-_MIN_OLD_TEXT_LEN = 10
+# H5: 从 10 提高到 30，避免板块前缀（如"视觉板块（002415"恰好10字符）误匹配多行
+_MIN_OLD_TEXT_LEN = 30
 
 
 def _find_section_range(lines: List[str], section_name: str):
@@ -216,21 +191,33 @@ def apply_edit_to_content(content: str, edit: dict) -> str:
 
         new_text = edit.get("new", "").strip() if action == "replace" else ""
 
+        # H5: 先统计 section 内匹配行数，多匹配时只处理第一条并 warning
+        match_indices = []
+        for i in range(sec_start, sec_end):
+            stripped = lines[i].strip()
+            if old_text and old_text in stripped:
+                match_indices.append(i)
+
+        if not match_indices:
+            print("  ⚠️ 跳过：section '{}' 内未找到匹配 old_text 的行".format(section_name))
+            return content
+
+        if len(match_indices) > 1:
+            print("  ⚠️ {}: section '{}' 内匹配到 {} 行，只处理第一条（避免批量误删/误改）".format(
+                action, section_name, len(match_indices)))
+
+        # 只处理第一条匹配行
+        target_idx = match_indices[0]
         new_lines = []
         for i, line in enumerate(lines):
-            # 不在 section 范围内的行原样保留
-            if i < sec_start or i >= sec_end:
-                new_lines.append(line)
-                continue
-            stripped = line.strip()
-            if old_text and old_text in stripped:
+            if i == target_idx:
                 if action == "delete":
                     continue  # skip this line
                 else:  # replace
-                    # 保持前缀格式
+                    stripped = line.strip()
                     prefix = ""
                     for prefix_candidate in ["rule: ", "anti: "]:
-                        if line.strip().startswith(prefix_candidate):
+                        if stripped.startswith(prefix_candidate):
                             prefix = prefix_candidate
                             break
                     new_lines.append(prefix + new_text)

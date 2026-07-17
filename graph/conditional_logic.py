@@ -34,6 +34,12 @@ class ConditionalLogic:
         if not messages:
             return clear_node
 
+        # M7: 显式工具循环上限，避免 LLM 陷入工具调用死循环
+        tool_msg_count = sum(1 for m in messages if hasattr(m, "type") and m.type == "tool")
+        if tool_msg_count >= 10:
+            logger.warning(f"工具循环达到上限 {tool_msg_count}，强制结束")
+            return clear_node
+
         last_msg = messages[-1]
         if hasattr(last_msg, "tool_calls") and last_msg.tool_calls:
             return tool_node

@@ -76,9 +76,10 @@ def main():
             k=get_klines(code)
             if not pred or d0 not in k or d1 not in k or d2 not in k: continue
             is_bull=pred["rating"].lower() in ("buy","overweight")
-            d1o=k[d1][0]; d2h=k[d2][2]; d2l=k[d2][3]; d2c=k[d2][1]; d0c=k[d0][1]
+            d1o=k[d1][0]; d2h=k[d2][2]; d2l=k[d2][3]; d2c=k[d2][1]
             hit_p=d1o*1.01; stop_p=d1o*0.97
-            step_trig=(d2h/d0c-1)*100>=1.0
+            # H1: STEP 基准与 collector.py 对齐，用 d1_open（买入价）而非 d0_close
+            step_trig=(d2h/d1o-1)*100>=1.0
 
             if is_bull and d2h>=hit_p:     hit+=1
             elif is_bull and d2l<=stop_p:  stop+=1

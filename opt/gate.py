@@ -27,6 +27,10 @@ def load_rejected_buffer() -> list:
 
 
 def save_rejected_buffer(buf: list):
+    # 注: rejected_buffer 当前未被 optimizer 读取，是历史遗留功能。
+    #     gate 仍会写入该文件以保留拒绝记录，但 optimizer 流程不消费它。
+    #     如需让 optimizer 参考历史拒绝以避免重复提案，需在 optimizer 中
+    #     主动调用 load_rejected_buffer() 注入上下文。
     BUFFER_PATH.parent.mkdir(parents=True, exist_ok=True)
     BUFFER_PATH.write_text(json.dumps(buf, ensure_ascii=False, indent=2), encoding="utf-8")
 

@@ -359,21 +359,18 @@ class AStockTradingGraph:
 
         # M8: market_direction 惰性计算 — 若调用方未设置（main.py/batchanalyze.py 等入口），
         # 则在此处自动计算，避免 Phase 1 分析师看不到市场方向闸门（M1 修复失效）
+        # H2: 修复两个 bug — (1) 缓存路径错误（overview 存在 overview_cache/ 而非 market_cache/）；
+        #                  (2) 类型不匹配（config.market_overview 是 string，compute_market_signal 期望 dict）
+        # 改用 load_overview 直接加载 dict，自动走 overview_cache
         market_direction = self.config.get("market_direction", "")
         if not market_direction:
             try:
                 from scripts.batch_predict import compute_market_signal
-                overview = self.config.get("market_overview", "")
-                if not overview:
-                    # 惰性拉取大盘概览
-                    try:
-                        from dataflows.market_cache import MarketDataCache
-                        cache = MarketDataCache.get_instance()
-                        overview = cache.get_public_data("market_overview_{}".format(trade_date)) or ""
-                    except Exception:
-                        pass
-                if overview:
-                    market_direction = compute_market_signal(overview)
+                from scripts.market_overview import load_overview
+                # load_overview 返回 dict，自动从 overview_cache/{trade_date}_overview.json 读取或实时拉取
+                overview_dict = load_overview(trade_date)
+                if overview_dict:
+                    market_direction = compute_market_signal(overview_dict)
                     if market_direction:
                         self.config["market_direction"] = market_direction
                         logger.info(f"market_direction 惰性计算: {market_direction[:80]}")

@@ -212,10 +212,12 @@ if backtest_date:
             except Exception:
                 continue
 
-            close_pct = (d1["close"] / d0 - 1) * 100
+            close_pct = (d1["close"] / d0 - 1) * 100  # 仅打印参考，不参与 HIT 判定
+            # (round-11, C-scripts-2): HIT 基准从 d0_close 改为 d1_open（实际买入价），
+            # 与 collector.py 的 d1_open 基准对齐，避免隔夜跳空与盘内涨跌混淆
             open_pct = (d1["close"] / d1["open"] - 1) * 100
             should_buy = bp["rating"] in ("Buy", "Overweight")
-            actually_up = close_pct >= 1.0
+            actually_up = open_pct >= 1.0
 
             if should_buy and actually_up:
                 v = "HIT"

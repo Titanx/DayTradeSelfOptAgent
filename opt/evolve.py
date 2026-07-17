@@ -243,16 +243,21 @@ def _load_current_skill_catalog() -> Dict[str, str]:
     for sf in sorted(SKILLS_DIR.glob("*.skill.md")):
         content = sf.read_text(encoding="utf-8")
         rules = []
+        # (round-11, H-opt-3): 用 in_section 跟踪 SKILLOPT-EDITABLE section，只提取可编辑规则
         in_section = False
         for line in content.split("\n"):
             stripped = line.strip()
             if stripped.startswith("## "):
+                in_section = False  # 重置，等遇到 SKILLOPT-EDITABLE 才开启
+                continue
+            if "SKILLOPT-EDITABLE" in line:
                 in_section = True
                 continue
-            if stripped.startswith("rule:") or stripped.startswith("anti:"):
+            if in_section and (stripped.startswith("rule:") or stripped.startswith("anti:")):
                 rules.append(stripped)
 
-        catalog[sf.stem] = "\n".join(rules[:30]) if rules else "(empty)"
+        # (round-11, H-opt-2): catalog key 去掉 .skill 后缀，与 applier 期望一致
+        catalog[sf.stem.replace(".skill", "")] = "\n".join(rules[:30]) if rules else "(empty)"
 
     return catalog
 
@@ -330,22 +335,21 @@ def discover(history: List[Dict] = None, force: bool = False) -> dict:
     config = get_config()
     model = config.get("deep_think_llm", "deepseek-chat")
 
-    # 复用 optimizer 的 LLM 工厂，支持 deepseek/openai/qwen/ollama 等多 provider
+    # (round-11, H-opt-1): 始终用真实 API key，不依赖 llm_opt 创建结果
+    api_key = os.environ.get("DEEPSEEK_API_KEY") or ""
     try:
         from opt.optimizer import _create_optimizer_llm
         llm_opt = _create_optimizer_llm()
-        api_key = "available"
     except Exception as _e:
-        # 回退：直接读 DeepSeek 环境变量
-        api_key = os.environ.get("DEEPSEEK_API_KEY")
+        llm_opt = None
         if not api_key:
             return {
                 "converged": True, "reason": reason,
                 "needs_structural_change": False,
                 "analysis": "DEEPSEEK_API_KEY not set",
-                "proposals": [], "error": "missing API key",
+                "proposals": [],
+                "error": "missing API key and llm_opt init failed: {}".format(_e),
             }
-        llm_opt = None
 
     base_url = os.environ.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1")
     import requests

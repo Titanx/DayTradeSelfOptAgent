@@ -372,6 +372,8 @@ class AStockTradingGraph:
         if not hasattr(self, '_market_direction_cache'):
             self._market_direction_cache = {}
         market_direction = self._market_direction_cache.get(trade_date, "")
+        # (round-11, M-core-3): market_overview 同步惰性计算，让 PM 能看到大盘背景
+        market_overview = self.config.get("market_overview", "")
         if not market_direction:
             try:
                 from scripts.batch_predict import compute_market_signal
@@ -380,11 +382,15 @@ class AStockTradingGraph:
                 overview_dict = load_overview(trade_date)
                 if overview_dict:
                     market_direction = compute_market_signal(overview_dict)
+                    # (round-11, M-core-3): 同步设置 market_overview，让 PM 能看到大盘背景
+                    if not market_overview:
+                        market_overview = str(overview_dict)
                     if market_direction:
                         self._market_direction_cache[trade_date] = market_direction
                         logger.info(f"market_direction 惰性计算: {market_direction[:80]}")
             except Exception as e:
-                logger.debug(f"market_direction 惰性计算失败: {e}")
+                # (round-11, M-core-4): debug→warning，生产环境可见
+                logger.warning(f"market_direction 惰性计算失败: {e}")
 
         # 初始状态
         initial_state = {
@@ -399,7 +405,8 @@ class AStockTradingGraph:
             "investment_debate_state": {"count": 0},
             "risk_debate_state": {"count": 0},
             "final_decision": "",
-            "market_overview": self.config.get("market_overview", ""),
+            # (round-11, M-core-3): 使用惰性计算后的 market_overview（含 overview_dict 回退）
+            "market_overview": market_overview,
             "market_direction": market_direction or self.config.get("market_direction", ""),
             "sector_momentum": self.config.get("sector_momentum", ""),
             "sector_context": self.config.get("sector_context", ""),
@@ -433,6 +440,11 @@ class AStockTradingGraph:
                     logger.info(f"硬过滤拦截 [{symbol}] {rating}→Hold: {reason}")
                     rating = "Hold"
                     action = "Hold"
+                    # (round-11, H-core-1): 硬过滤后必须清零 position_pct 和 confidence，
+                    # 否则下游（batch_backtest/collector）可能根据 position_pct>0 实际建仓，
+                    # 违反硬过滤意图
+                    position_pct = 0.0
+                    confidence = 0.0
                     decision_text = (decision_text or "") + \
                         f"\n\n**硬过滤**: {reason} → 强制 Hold"
             except Exception as e:
@@ -630,12 +642,21 @@ class AStockTradingGraph:
                 stop_price = d1_open * (1 - stop_loss_pct / 100.0)
 
                 # 提取评级信息
-                rating_match = re.search(r'\*\*Rating\*\*:\s*(\w+)', entry_text)
-                rating = rating_match.group(1) if rating_match else "?"
+                # (round-11, H-core-3): \w+ 无法匹配 "Strong Buy" 等多词评级，改用与 store_decision 一致的正则
+                rating_match = re.search(r'\*\*Rating\*\*:\s*([A-Za-z ]+?)(?:\s*[\n(]|\s*$)', entry_text)
+                rating = rating_match.group(1).strip() if rating_match else "?"
 
                 is_bull = rating in ("Buy", "Overweight")
                 if is_bull:
-                    if d2_high >= hit_price:
+                    # (round-11, H-core-4): HIT/STOP 同时触发时用 d2_open 判断优先级
+                    # 若开盘即止损（d2_open <= stop_price），HIT 永不触发，应记止损
+                    d2_open = price_map[d2_date][0]    # Day2 开盘
+                    if d2_open <= stop_price:
+                        # 开盘即止损
+                        raw_return = -stop_loss_pct
+                        hint = "开盘止损"
+                        exit_price = d2_open
+                    elif d2_high >= hit_price:
                         # 止盈触发
                         raw_return = target_gain_pct
                         hint = "止盈命中"
@@ -686,7 +707,8 @@ class AStockTradingGraph:
         confidence = 0.5
 
         # 1. 尝试 Markdown 格式: **Rating**: Buy
-        rating_match = re.search(r'\*\*Rating\*\*:\s*([\w\s]+?)(?:\s*\n|\s*$)', text)
+        # (round-11, M-core-1): 与 store_decision 统一正则，支持括号注释如 "Buy (高风险)"
+        rating_match = re.search(r'\*\*Rating\*\*:\s*([A-Za-z ]+?)(?:\s*[\n(]|\s*$)', text)
         if rating_match:
             rating = rating_match.group(1)
 
@@ -724,7 +746,16 @@ class AStockTradingGraph:
                         data = data["decision"]
                     rating = data.get("rating", "Hold")
                     action = data.get("action", data.get("rating", "Hold"))
-                    confidence = float(data.get("confidence", 0.5))
+                    # (round-11, H-core-5): 防御性解析 confidence，处理字符串格式如 "80%"
+                    try:
+                        confidence = float(data.get("confidence", 0.5))
+                    except (ValueError, TypeError):
+                        cstr = str(data.get("confidence", "0.5")).strip().rstrip("%")
+                        try:
+                            cv = float(cstr)
+                            confidence = cv / 100 if cv > 1 else cv
+                        except Exception:
+                            confidence = 0.5
             except Exception as e:
                 logger.debug(f"JSON 决策解析失败，使用默认值: {e}")
 

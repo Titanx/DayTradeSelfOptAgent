@@ -5,8 +5,9 @@
 | v1.0.0  | manual | 2026-06-24 |
 
 ## strategy
+<!-- SKILLOPT-EDITABLE -->
 一日游策略：Day 0收盘分析 → Day 1买入 → Day 2强制平仓。持有仅1个交易日。
-**硬门槛**：Day1 涨幅必须 ≥1% 才出手 (成本 0.11%)。
+**硬门槛**：Day1 涨幅必须 ≥1% 才出手 (成本 0.11%)。<!-- 不可更改 -->
 
 ## rules
 <!-- SKILLOPT-EDITABLE -->

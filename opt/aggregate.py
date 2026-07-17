@@ -188,29 +188,10 @@ def aggregate(edits_data: dict, use_llm: bool = False) -> dict:
         deletes = actions["delete"]
         replaces = actions["replace"]
 
-        if adds and deletes:
-            merge_log.append({
-                "action": "resolve_conflict",
-                "file": key[0],
-                "section": key[1],
-                "detail": "delete+add → replace",
-            })
-            for d, a in zip(deletes, adds):
-                replaces.append({
-                    "action": "replace",
-                    "file": key[0],
-                    "section": key[1],
-                    "old": d.get("old", ""),
-                    "new": a.get("new", ""),
-                    "_resolved_from": "delete+add",
-                })
-            for d in deletes[len(adds):]:
-                final_edits.append(d)
-            for a in adds[len(deletes):]:
-                final_edits.append(a)
-            final_edits.extend(replaces)
-        else:
-            final_edits.extend(adds + deletes + replaces)
+        # (round-11, H-opt-5): 不做 delete+add→replace 转换，保持各自独立
+        # 原 zip 配对会产生语义错位的 replace（如用 Solar 规则替换 AI 反向规则）
+        # adds 和 deletes 直接进入 final_edits，不强制合并为 replace
+        final_edits.extend(adds + deletes + replaces)
 
     if use_llm and len(final_edits) > 3:
         final_edits = _llm_merge(final_edits, merge_log)

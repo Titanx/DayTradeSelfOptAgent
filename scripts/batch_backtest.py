@@ -70,7 +70,7 @@ def load_pred(code, d0):
             d = json.loads(f.read_text(encoding="utf-8"))
             return {"rating": d.get("rating", "?"), "conf": d.get("confidence", 0)}
         except Exception:
-            return None
+            continue  # (round-11, H-scripts-2): 首文件损坏不放弃，尝试下一个候选文件
     return None
 
 

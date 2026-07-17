@@ -32,8 +32,16 @@ except Exception:
     # 回退到本地缓存（路径相对项目根目录，避免硬编码绝对路径）
     cache_path = (Path(__file__).parent.parent / "data" / "market_cache"
                   / f"{TODAY}_get_sector_boards.cache.json")
-    data = json.loads(cache_path.read_text(encoding="utf-8"))
-    sector_names = list({r["板块"] for r in data})
+    # (round-11, H-scripts-4): 缓存读取加 try/except + 格式校验，缓存缺失/损坏时不崩溃
+    try:
+        data = json.loads(cache_path.read_text(encoding="utf-8"))
+        if isinstance(data, list):
+            sector_names = list({r["板块"] for r in data if isinstance(r, dict) and "板块" in r})
+        else:
+            sector_names = []
+    except Exception as e:
+        print(f"缓存回退也失败: {e}")
+        sys.exit(1)
 
 print(f"📡 {len(sector_names)} 个行业板块, 回填近30天")
 
@@ -117,9 +125,8 @@ for date in sorted(buckets.keys()):
     for idx, r in enumerate(records):
         r["序号"] = idx + 1
 
-    key = cache._make_key("get_sector_boards", date)
-    cache._memory[key] = records
-    cache._save_disk("get_sector_boards", date, records)
+    # (round-11, H-scripts-5): 改用公开 API cache.set，不绕过 RLock
+    cache.set("get_sector_boards", records, date)
     saved += 1
 
 print(f"\n💾 已保存: {saved} 天到 market_cache")

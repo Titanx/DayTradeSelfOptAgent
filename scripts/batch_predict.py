@@ -351,9 +351,13 @@ def main():
     data_bundles = {}
     skipped_data = []
 
-    if not args.no_overview:
-        print("\n📊 Phase 0: 数据集中获取 ...")
+    print("\n📊 Phase 0: 数据集中获取 ...")
+    cache = MarketDataCache.get_instance()
+    cache.set_trade_date(trade_date)
 
+    # (round-11, C-scripts-3): --no-overview 只跳过大盘 overview，个股数据预取始终执行，
+    # 避免 --no-overview 分支 data_bundles={} 导致 agent 多线程并发回源触发反爬
+    if not args.no_overview:
         # 1. 大盘概览
         overview = load_overview(trade_date)
         shared_overview = overview_to_prompt(overview)
@@ -373,45 +377,44 @@ def main():
             print(f"   板块动量: {', '.join(f'{s}({sector_momentum[s][:15]})' for s in hot_sectors)}")
         else:
             print(f"   板块动量: 数据不可用(晚间AKShare)")
-
-        # 2. 公共数据 (市场情绪/北向/板块/资金流)
-        print(f"   公共数据: 市场情绪 + 北向资金 + 板块排行 + 资金流 ...")
-        cache = MarketDataCache.get_instance()
-        cache.set_trade_date(trade_date)
-        public_data = _prefetch_public_data()
-
-        # 3. 预加载个股价格到内存缓存
-        symbols = [c for c, n, s in ALL_STOCKS]
-        cache.preload_stock_data(symbols)
-        cache.load_stock_price_history(symbols, days=30)
-
-        # 4. 逐股拉取数据 + 完整性校验 (串行+节流，避免触发东财风控)
-        print(f"   个股数据: 逐股拉取 (间隔≥{_THROTTLE_INTERVAL}s) + 完整性校验 ...")
-        for code, name, sector in todo:
-            stock_data = _gather_stock_data(code, name)
-            missing = _validate_data(stock_data, public_data)
-            if missing:
-                skipped_data.append((code, name, sector, missing))
-                continue
-            data_bundles[code] = _build_data_context(stock_data, public_data, shared_overview)
-            time.sleep(_THROTTLE_INTERVAL + random.uniform(0.1, 0.4))
-
-        # 去重
-        skipped_codes = {x[0] for x in skipped_data}
-        todo = [(c, n, s) for c, n, s in todo if c not in skipped_codes]
-
-        if skipped_data:
-            print(f"\n⚠️  数据不完整，跳过 {len(skipped_data)} 只:")
-            for code, name, sector, missing in skipped_data:
-                print(f"   {code} {name} ({sector}) — 缺失: {', '.join(missing)}")
-
-        print(f"\n✅ 数据就绪: {len(todo)} 只，即将开始辩论")
-        print("=" * 60)
     else:
         # H2: --no-overview 分支补默认值，避免 analyze_one 引用未定义变量导致 NameError
         shared_overview = ""
         market_direction = "市场方向: NEUTRAL (跳过预加载)"
         sector_momentum = {}
+        print("   (跳过大盘 overview 预加载)")
+
+    # 2. 公共数据 (市场情绪/北向/板块/资金流) — 始终执行
+    print(f"   公共数据: 市场情绪 + 北向资金 + 板块排行 + 资金流 ...")
+    public_data = _prefetch_public_data()
+
+    # 3. 预加载个股价格到内存缓存 — 始终执行，避免多线程并发回源触发反爬
+    symbols = [c for c, n, s in ALL_STOCKS]
+    cache.preload_stock_data(symbols)
+    cache.load_stock_price_history(symbols, days=30)
+
+    # 4. 逐股拉取数据 + 完整性校验 (串行+节流，避免触发东财风控) — 始终执行
+    print(f"   个股数据: 逐股拉取 (间隔≥{_THROTTLE_INTERVAL}s) + 完整性校验 ...")
+    for code, name, sector in todo:
+        stock_data = _gather_stock_data(code, name)
+        missing = _validate_data(stock_data, public_data)
+        if missing:
+            skipped_data.append((code, name, sector, missing))
+            continue
+        data_bundles[code] = _build_data_context(stock_data, public_data, shared_overview)
+        time.sleep(_THROTTLE_INTERVAL + random.uniform(0.1, 0.4))
+
+    # 去重
+    skipped_codes = {x[0] for x in skipped_data}
+    todo = [(c, n, s) for c, n, s in todo if c not in skipped_codes]
+
+    if skipped_data:
+        print(f"\n⚠️  数据不完整，跳过 {len(skipped_data)} 只:")
+        for code, name, sector, missing in skipped_data:
+            print(f"   {code} {name} ({sector}) — 缺失: {', '.join(missing)}")
+
+    print(f"\n✅ 数据就绪: {len(todo)} 只，即将开始辩论")
+    print("=" * 60)
 
     if not todo:
         print("全部数据不完整，无股票可分析。")
@@ -514,7 +517,8 @@ def main():
         if r["rating"] in ("Buy", "Overweight") and r.get("position_pct") is None:
             r["position_pct"] = max_pos
 
-    buy_items = [r for r in all_results if r["rating"] in ("Buy", "Overweight") and r.get("position_pct")]
+    # (round-11, H-scripts-1): 仓位归一化只针对本次新跑的 results，不含 skipped/skipped_data
+    buy_items = [r for r in results if r["rating"] in ("Buy", "Overweight") and r.get("position_pct")]
     total_raw = sum(r["position_pct"] for r in buy_items)
     if total_raw > 1.0:
         # 等比压缩

@@ -109,12 +109,16 @@ class MarketDataCache:
     """市场公共数据缓存（内存 + Markdown 磁盘双层，支持多日历史）"""
 
     _instance: Optional["MarketDataCache"] = None
+    _instance_lock = threading.Lock()
 
     # ---------- 单例 ----------
     @classmethod
     def get_instance(cls) -> "MarketDataCache":
+        # (round-11, H-opt-7): 加锁 + double-check 保证单例线程安全
         if cls._instance is None:
-            cls._instance = cls()
+            with cls._instance_lock:
+                if cls._instance is None:
+                    cls._instance = cls()
         return cls._instance
 
     def __init__(self, cache_dir: Path = None, opinion_cache_dir: Path = None, stock_cache_dir: Path = None):
@@ -165,14 +169,15 @@ class MarketDataCache:
         """通用键值缓存写入（内存+JSON磁盘）"""
         with self._lock:
             self._memory[key] = data
-            json_path = self.cache_dir / f"{key}.cache.json"
-            try:
-                self._atomic_write_text(
-                    json_path,
-                    json.dumps(_to_jsonable(data), ensure_ascii=False),
-                )
-            except Exception as e:
-                logger.warning(f"公共数据缓存写入失败 {key}: {e}")
+        # (round-11, H-opt-4): 磁盘写入移到锁外，避免阻塞其他线程
+        json_path = self.cache_dir / f"{key}.cache.json"
+        try:
+            self._atomic_write_text(
+                json_path,
+                json.dumps(_to_jsonable(data), ensure_ascii=False),
+            )
+        except Exception as e:
+            logger.warning(f"公共数据缓存写入失败 {key}: {e}")
 
     def get(self, method: str, date: str = None) -> Optional[Any]:
         """从缓存获取数据（内存 → 磁盘回退）"""
@@ -203,7 +208,8 @@ class MarketDataCache:
 
             key = self._make_key(method, date)
             self._memory[key] = data
-            self._save_disk(method, date, data)
+        # (round-11, H-opt-4): 磁盘写入移到锁外，避免阻塞其他线程
+        self._save_disk(method, date, data)
 
     def fetch(self, method: str) -> Optional[Any]:
         """获取或拉取：缓存命中则返回，否则实时拉取并缓存"""
@@ -353,26 +359,27 @@ class MarketDataCache:
                 return
             key = self._make_opinion_key(symbol, method)
             self._opinion_memory[key] = data
-
             filepath = self._get_opinion_filepath(symbol, method)
-            title = METHOD_TITLES.get(method, method)
-
-            # MD 人类可读
-            try:
-                self._atomic_write_text(filepath, to_markdown(data, f"{title} — {symbol} ({self._trade_date})"))
-            except Exception as e:
-                logger.warning(f"舆情 MD 写入失败 {symbol} {method}: {e}")
-
-            # JSON 跨会话恢复
             json_path = filepath.with_suffix(".cache.json")
-            try:
-                self._atomic_write_text(
-                    json_path,
-                    json.dumps(_to_jsonable(data), ensure_ascii=False),
-                )
-                logger.info(f"💾 [舆情缓存保存] {symbol} {method}")
-            except Exception as e:
-                logger.warning(f"舆情 JSON 写入失败 {symbol} {method}: {e}")
+            trade_date = self._trade_date
+        # (round-11, H-opt-4): 磁盘写入移到锁外，避免阻塞其他线程
+        title = METHOD_TITLES.get(method, method)
+
+        # MD 人类可读
+        try:
+            self._atomic_write_text(filepath, to_markdown(data, f"{title} — {symbol} ({trade_date})"))
+        except Exception as e:
+            logger.warning(f"舆情 MD 写入失败 {symbol} {method}: {e}")
+
+        # JSON 跨会话恢复
+        try:
+            self._atomic_write_text(
+                json_path,
+                json.dumps(_to_jsonable(data), ensure_ascii=False),
+            )
+            logger.info(f"💾 [舆情缓存保存] {symbol} {method}")
+        except Exception as e:
+            logger.warning(f"舆情 JSON 写入失败 {symbol} {method}: {e}")
 
     def preload_opinions(self):
         """扫描磁盘已有舆情缓存，加载到内存（跨会话恢复）"""
@@ -469,22 +476,24 @@ class MarketDataCache:
                 return
 
             filepath = self._get_stock_filepath(symbol, method)
-            title = METHOD_TITLES.get(method, method)
-
-            try:
-                self._atomic_write_text(filepath, to_markdown(data, f"{title} — {symbol} ({self._trade_date})"))
-            except Exception as e:
-                logger.warning(f"个股 MD 写入失败 {symbol} {method}: {e}")
-
             json_path = filepath.with_suffix(".cache.json")
-            try:
-                self._atomic_write_text(
-                    json_path,
-                    json.dumps(_to_jsonable(data), ensure_ascii=False),
-                )
-                logger.info(f"💾 [个股缓存保存] {symbol} {method}")
-            except Exception as e:
-                logger.warning(f"个股 JSON 写入失败 {symbol} {method}: {e}")
+            trade_date = self._trade_date
+        # (round-11, H-opt-4): 磁盘写入移到锁外，避免阻塞其他线程
+        title = METHOD_TITLES.get(method, method)
+
+        try:
+            self._atomic_write_text(filepath, to_markdown(data, f"{title} — {symbol} ({trade_date})"))
+        except Exception as e:
+            logger.warning(f"个股 MD 写入失败 {symbol} {method}: {e}")
+
+        try:
+            self._atomic_write_text(
+                json_path,
+                json.dumps(_to_jsonable(data), ensure_ascii=False),
+            )
+            logger.info(f"💾 [个股缓存保存] {symbol} {method}")
+        except Exception as e:
+            logger.warning(f"个股 JSON 写入失败 {symbol} {method}: {e}")
 
     def preload_stock_data(self, symbols: list = None):
         """扫描磁盘已有个股缓存，加载到内存（跨会话恢复）"""
@@ -578,8 +587,10 @@ class MarketDataCache:
 
     def _atomic_write_text(self, path: Path, content: str):
         """原子写入文本文件（tmp + replace），避免进程崩溃产生损坏文件"""
+        # (round-11, H-opt-6): 用 uuid 避免并发写同路径的 TOCTOU 竞态
         # (round-10, M-opt-1): 加异常清理，避免 tmp 文件残留累积
-        tmp = path.with_name(path.name + ".tmp")
+        import uuid
+        tmp = path.with_name(f".{path.name}.{uuid.uuid4().hex[:8]}.tmp")
         try:
             tmp.write_text(content, encoding="utf-8")
             tmp.replace(path)  # 原子操作（同文件系统下 os.replace）

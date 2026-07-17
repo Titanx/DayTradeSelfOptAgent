@@ -149,16 +149,33 @@ def _apply_env_overrides(config: dict) -> dict:
 
 
 def get_config() -> dict:
-    """获取完整配置（含环境变量覆盖）"""
+    """获取完整配置（含环境变量覆盖）
+
+    (round-11, C-core-1): 优先返回 set_config 设置的运行时配置，
+    否则返回 DEFAULT_CONFIG + 环境变量覆盖。
+    修复 enable_opinion_monitor 等运行时配置项失效的问题。
+    """
+    if _RUNTIME_CONFIG is not None:
+        return copy.deepcopy(_RUNTIME_CONFIG)
     return _apply_env_overrides(copy.deepcopy(DEFAULT_CONFIG))
 
 
+# (round-11, C-core-1): 运行时配置全局变量，由 set_config 写入
+_RUNTIME_CONFIG: dict = None
+
+
 def set_config(config: dict) -> dict:
-    """运行时设置配置（浅合并到默认配置）"""
+    """运行时设置配置（浅合并到默认配置）
+
+    (round-11, C-core-1): 将合并后的配置写入全局 _RUNTIME_CONFIG，
+    使后续 get_config() 调用能读取到运行时设置（如 enable_opinion_monitor=False）。
+    """
+    global _RUNTIME_CONFIG
     merged = copy.deepcopy(DEFAULT_CONFIG)
     for k, v in config.items():
         if k in merged and isinstance(merged[k], dict) and isinstance(v, dict):
             merged[k].update(v)
         else:
             merged[k] = v
-    return _apply_env_overrides(merged)
+    _RUNTIME_CONFIG = _apply_env_overrides(merged)
+    return copy.deepcopy(_RUNTIME_CONFIG)

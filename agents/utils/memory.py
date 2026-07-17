@@ -187,7 +187,9 @@ class TradingMemoryLog:
 
         # (round-10, L-core-3): 删除未使用的 pending 变量（死代码），
         # 后续 all_entries 重建用的是内联 "pending" in e[:200] 判断。
-        resolved = [e for e in entries if "pending" not in e[:200]]
+        # (round-11, M-core-6): entry 实际格式为 "[date | symbol | rating | pending]"，
+        # 用 "| pending]" 精确匹配 header，避免 reflection 正文中出现 "pending" 子串误判。
+        resolved = [e for e in entries if "| pending]" not in e[:200]]
 
         if len(resolved) <= self.max_entries:
             return
@@ -202,7 +204,7 @@ class TradingMemoryLog:
         # 导致最新 pending 决策在 resolved 数量 >= max_same 时被排除出上下文。
         all_entries = [
             e for e in entries
-            if (e in resolved_keep_set) or ("pending" in e[:200])
+            if (e in resolved_keep_set) or ("| pending]" in e[:200])
         ]
         tmp_path = self.log_path.with_suffix(".tmp")
         tmp_path.write_text(ENTRY_SEPARATOR.join(all_entries), encoding="utf-8")

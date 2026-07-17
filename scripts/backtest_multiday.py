@@ -122,14 +122,16 @@ def main():
             rating = pred.get("rating", "?")
             confidence = pred.get("confidence", 0)
 
-            close_pct = (d1_close / d0_close - 1) * 100
+            close_pct = (d1_close / d0_close - 1) * 100  # 仅打印参考，不参与 HIT 判定
+            # (round-11, C-scripts-2): HIT 基准从 d0_close 改为 d1_open（实际买入价），
+            # 与 collector.py 的 d1_open 基准对齐，避免隔夜跳空与盘内涨跌混淆
             open_pct = (d1_close / d1_open - 1) * 100
-            net_pct = open_pct - 0.11
+            net_pct = open_pct - 0.11  # 扣除成本
 
             should_buy = rating in ("Buy", "Overweight")
-            actually_up = close_pct >= 1.0
+            actually_up = open_pct >= TARGET_GAIN_PCT
             # M-scripts-4 (round-9): STEP 基准改用 d1_open（买入价）→ d1_high（日内最高），
-            # 与 collector.py / batch_backtest.py 的 d1o 基准对齐；HIT/MISS 维持原 d0_close 基准以最小改动
+            # 与 collector.py / batch_backtest.py 的 d1o 基准对齐
             step_trig = (d1_high / d1_open - 1) * 100 >= TARGET_GAIN_PCT
 
             if should_buy and actually_up:
@@ -143,7 +145,7 @@ def main():
 
             day_results[trade_date][verdict.lower().replace(" ","_")] += 1
 
-            print(f"  {pure_code} {name}: {rating:12s} conf={confidence:.0%}  →  {d1_date}: {close_pct:+.2f}%  [{verdict}]")
+            print(f"  {pure_code} {name}: {rating:12s} conf={confidence:.0%}  →  {d1_date}: c2c={close_pct:+.2f}% o2c={open_pct:+.2f}%  [{verdict}]")
 
     # ---- 4. 汇总 ----------
     print("\n" + "=" * 72)

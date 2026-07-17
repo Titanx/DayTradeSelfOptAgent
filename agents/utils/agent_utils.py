@@ -312,8 +312,18 @@ def get_sector_fund_flow_data(days: int = 3) -> str:
     Returns:
         Markdown 格式的板块资金流报告
     """
-    from datetime import date
-    cache_key = f"sector_fund_flow_{date.today()}"
+    # (round-11, M-core-2): 用 trade_date 而非 date.today()，与 get_global_macro_data 一致
+    from dataflows.market_cache import MarketDataCache
+    from dataflows.akshare_adapter import _BJ_TIME
+    from datetime import datetime
+    try:
+        trade_date = MarketDataCache.get_instance().get_trade_date()
+    except Exception as e:
+        logger.debug(f"获取 trade_date 失败: {e}")
+        trade_date = ""
+    if not trade_date:
+        trade_date = datetime.now(_BJ_TIME).strftime("%Y-%m-%d")
+    cache_key = f"sector_fund_flow_{trade_date}"
 
     try:
         from dataflows.market_cache import MarketDataCache
@@ -564,7 +574,10 @@ def check_liquidity_risk(symbol: str, stock_name: str = "") -> str:
     name_lower = stock_name.lower() if stock_name else ""
     # 使用词边界避免误匹配 "BEST"/"POST" 等含 ST 子串的单词；中文名用 startswith 更精确
     st_match = bool(re.search(r'(\*ST|\bST\b)', quote_data)) or bool(re.search(r'(\*ST|\bST\b)', price_data))
-    if st_match or name_lower.startswith('*st') or name_lower.startswith('st '):
+    # (round-11, H-core-2): 统一 ST 判定，避免风险章节和结论章节不一致
+    # 去掉 startswith('st ') 的尾部空格要求，匹配中文 ST 名如 "ST天宝"
+    is_st = st_match or name_lower.startswith('*st') or name_lower.startswith('st')
+    if is_st:
         lines.append("### 1. ST/退市风险")
         lines.append("> 🔴 **该股为 ST 股票，涨跌停仅 5%，流动性极差，一日游策略严禁参与！**")
         lines.append("> 建议: **强制回避**")
@@ -608,7 +621,8 @@ def check_liquidity_risk(symbol: str, stock_name: str = "") -> str:
 
     lines.append("")
     lines.append("### 结论")
-    if st_match:
+    # (round-11, H-core-2): 结论章节与风险章节使用统一的 is_st 判定
+    if is_st:
         lines.append("> 🔴 **坚决回避** — ST 股票不符合一日游策略条件")
     elif limit_down:
         lines.append("> 🟠 **建议观望** — 有跌停记录，Day 2 可能无法顺利卖出")

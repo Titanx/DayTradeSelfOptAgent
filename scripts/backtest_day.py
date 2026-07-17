@@ -2,6 +2,8 @@
 # TODO: STEP 基准未统一为 d1o（round-9 未修）
 # 该脚本为针对 2026-06-22→0623 的一次性历史回测（日期与 PREDICTIONS 均硬编码），
 # 修改 STEP 基准会破坏历史回测可复现性，故按 round-9 保守策略仅标注，不改逻辑。
+# 注意: 本脚本使用 close-to-close 基准（d0_close → d1_close），与 collector.py 的
+# d1_open 基准不可直接对比。为保持历史回测可复现性，不修改 HIT 基准。
 import urllib.request, json
 
 STOCKS = [

@@ -120,9 +120,11 @@ print(f"  ✅ AVOID (正确回避):  {avoid}")
 print(f"  👣 STEP (踏空):       {step}")
 if bull_total>0:
     # (round-10, M-scripts-1): pnl 改用 config 驱动的参数，与 H8 触发阈值对齐
-    pnl_sum = hit*(TARGET_GAIN_PCT/100.0) + stop*(-STOP_LOSS_PCT/100.0)
+    # (round-11, H-scripts-3): 扣除交易成本 0.11%（买+卖单边成本）
+    COST_PCT = 0.11
+    pnl_sum = hit*(TARGET_GAIN_PCT/100.0 - COST_PCT/100.0) + stop*(-STOP_LOSS_PCT/100.0 - COST_PCT/100.0)
     for r in records:
-        if r["result"]=="FLAT": pnl_sum += r["close_profit"]/100
+        if r["result"]=="FLAT": pnl_sum += r["close_profit"]/100 - COST_PCT/100.0
     print(f"  💰 看多信号平均盈亏: {pnl_sum/bull_total*100:+.2f}%")
 if total>0:
     print(f"  📈 准确率(HIT+AVOID): {(hit+avoid)/total*100:.1f}%")

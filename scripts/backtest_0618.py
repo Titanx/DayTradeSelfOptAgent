@@ -1,4 +1,6 @@
 """一日游回测: Day0(0618) → Day1(0619) → 今日(0622)"""
+# 注意: 本脚本使用 close-to-close 基准（d0_close → d1_close），与 collector.py 的
+# d1_open 基准不可直接对比。为保持历史回测可复现性，不修改 HIT 基准。
 import json, urllib.request
 from pathlib import Path
 

@@ -285,14 +285,15 @@ def main():
                 print("  ✅ Rolled back {} skill files".format(restored))
                 # 清除 last_run 避免重复回滚
                 _save_last_run({})
-                # M5: 回滚后 skill 已恢复到 apply 前 baseline，应记录 old_acc（而非劣化后的 new_acc）
-                # 避免污染 evolve 的收敛检测（否则会把劣化值当成"该轮真实表现"）
+                # M5: 回滚后 skill 已恢复到 apply 前 baseline
                 # M4: hit/miss/step 等字段也置为 0（回滚后这些劣化数据不再代表真实表现），
                 # 避免discover()的LLM prompt展示"accuracy=70%但HIT只有12/20=60%"的矛盾数据
+                # (round-10, M-opt-3): accuracy 也置为 0，与 hit/avoid/miss/step=0 一致，避免矛盾数据；
+                # rolled_back 记录已被 detect_convergence / discover 过滤，accuracy 不再影响收敛检测
                 rollback_rollout = {
                     "group_summary": {
                         "overall": {
-                            "accuracy": old_acc,
+                            "accuracy": 0,
                             "hit": 0,
                             "avoid": 0,
                             "miss": 0,

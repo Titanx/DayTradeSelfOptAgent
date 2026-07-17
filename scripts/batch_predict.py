@@ -420,6 +420,9 @@ def main():
     # --- Phase 1: Concurrent Debate ---
     print("\n🚀 Phase 1: 并发辩论 ...\n")
     print_lock = Lock()
+    # (round-10, M-scripts-2): 线程安全的已完成计数器，替代 idx 用于 ETA 计算
+    completed_count = [0]  # 闭包计数器，线程安全用 completed_lock 保护
+    completed_lock = Lock()
     results = []
     start_time = time.time()
 
@@ -455,10 +458,14 @@ def main():
 
             conf = result.get("confidence", 0)
             pos = result.get("position_pct")
+            # (round-10, M-scripts-2): 用线程安全的已完成计数器替代 idx（idx 是任务 ID 非已完成数）
+            with completed_lock:
+                completed_count[0] += 1
+                done = completed_count[0]
             with print_lock:
                 elapsed = time.time() - start_time
-                # (round-9, L-scripts-6): ETA 需除以 workers（并发执行），否则高估
-                eta = (elapsed / max(idx, 1)) * (total - idx) / max(args.workers, 1) if idx > 0 else 0
+                # (round-10, M-scripts-2): elapsed/done 已含并发因子，不再 /workers（修复 L-scripts-6 后期低估）
+                eta = (elapsed / max(done, 1)) * (total - done) if done > 0 else 0
                 pos_str = f" pos={pos:.0%}" if pos else ""
                 print(f"[{idx:2d}/{total}] {code} {name} ({sector}) → {rating} ({conf:.0%}){pos_str} ⏱{dt:.0f}s | ETA {eta/60:.0f}min")
             return {"code": code, "name": name, "sector": sector,

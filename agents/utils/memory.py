@@ -185,8 +185,8 @@ class TradingMemoryLog:
         entries = content.split(ENTRY_SEPARATOR)
         entries = [e.strip() for e in entries if e.strip()]
 
-        # pending 条目不删除
-        pending = [e for e in entries if "pending" in e[:200]]
+        # (round-10, L-core-3): 删除未使用的 pending 变量（死代码），
+        # 后续 all_entries 重建用的是内联 "pending" in e[:200] 判断。
         resolved = [e for e in entries if "pending" not in e[:200]]
 
         if len(resolved) <= self.max_entries:

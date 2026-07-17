@@ -27,6 +27,25 @@ OUTPUT_DIR = PROJECT_DIR / "opt" / "output"
 SNAPSHOT_DIR = PROJECT_DIR / "opt" / "snapshots"
 
 
+def _atomic_write_text(path, content):
+    """原子写入文本文件（tmp + replace），避免写入中途崩溃导致文件损坏
+
+    (round-10, M-opt-6): skill 文件与 applied.json 均为核心配置，
+    非原子写入中途崩溃会产生截断文件，导致后续加载失败。
+    """
+    path = Path(path)
+    tmp = path.with_name(path.name + ".tmp")
+    try:
+        tmp.write_text(content, encoding="utf-8")
+        tmp.replace(path)
+    except Exception:
+        try:
+            tmp.unlink(missing_ok=True)
+        except Exception:
+            pass
+        raise
+
+
 def backup_skills():
     """备份当前所有 skill 文件到 snapshots/"""
     # L3: 加 uuid4 后缀避免秒级时间戳在并发/快速连续调用时覆盖
@@ -284,12 +303,14 @@ def apply_edits(edits_path: str = None) -> dict:
         if new_content == old_content:
             skipped.append({"edit": edit, "reason": "no change detected"})
         else:
-            skill_path.write_text(new_content, encoding="utf-8")
+            # (round-10, M-opt-6): 改用原子写入，避免 skill 文件写入中途崩溃导致损坏
+            _atomic_write_text(skill_path, new_content)
             applied.append({"edit": edit, "file": str(skill_path)})
             print("Applied {} to {} section {}".format(
                 edit["action"], file_name, edit.get("section", "?")))
 
     # 保存 applied.json 记录
+    # (round-10, M-opt-6): 改用原子写入，避免 applied.json 写入中途崩溃导致损坏
     record = {
         "timestamp": data.get("meta", {}).get("timestamp", datetime.now().isoformat()),
         "analysis": data.get("analysis", ""),
@@ -297,8 +318,10 @@ def apply_edits(edits_path: str = None) -> dict:
         "skipped": skipped,
         "backup_dir": str(backup_dir),
     }
-    (OUTPUT_DIR / "applied.json").write_text(
-        json.dumps(record, ensure_ascii=False, indent=2), encoding="utf-8")
+    _atomic_write_text(
+        OUTPUT_DIR / "applied.json",
+        json.dumps(record, ensure_ascii=False, indent=2),
+    )
 
     print("\nApplied: {} edits, Skipped: {}".format(len(applied), len(skipped)))
     return record

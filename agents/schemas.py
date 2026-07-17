@@ -178,7 +178,8 @@ def render_research_plan(plan: ResearchPlan) -> str:
 def render_trader_proposal(proposal: TraderProposal) -> str:
     lines = [f"**Action**: {proposal.action.value}"]
     if proposal.position_pct is not None:
-        lines.append(f"**Position**: {proposal.position_pct:.0%}")
+        # (round-10, L-core-2): 仓位格式同步 :.1%，与 PortfolioDecision 渲染保持一致
+        lines.append(f"**Position**: {proposal.position_pct:.1%}")
     if proposal.entry_signal:
         lines.append(f"**Day1入场信号**: {proposal.entry_signal}")
     if proposal.day1_upside_catalyst:

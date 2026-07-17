@@ -450,7 +450,9 @@ Maximum 2 proposals."""
 
     user_msg = "# Pipeline Accuracy History\n\n"
     user_msg += "Recent runs:\n"
-    for h in history[-CONVERGENCE_WINDOW:]:
+    # (round-10, M-opt-2): 过滤 rolled_back 记录，避免向 LLM 投喂矛盾数据
+    recent_history = [h for h in history[-CONVERGENCE_WINDOW:] if not h.get("rolled_back", False)]
+    for h in recent_history:
         user_msg += "- {run}: acc={acc}% (HIT:{hit} AVOID:{avoid} MISS:{miss} STEP:{step})\n".format(
             run=h.get("run_id", "?")[-12:],
             acc=h.get("accuracy", 0),

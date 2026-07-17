@@ -938,7 +938,9 @@ def _detect_us_session() -> dict:
         # Python 3.9+ 自带 zoneinfo
         from zoneinfo import ZoneInfo
         us_now = datetime.now(ZoneInfo("America/New_York"))
-        is_dst = us_now.dst() is not None
+        # (round-10, L-core-1): dst() 对 aware datetime 恒返回 timedelta（永不返回 None），
+        # 原 `is not None` 写法恒为 True；改用 bool() 判断是否处于夏令时。
+        is_dst = bool(us_now.dst())
         us_hour = us_now.hour
         us_minute = us_now.minute
     except Exception:

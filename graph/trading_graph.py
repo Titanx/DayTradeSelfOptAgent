@@ -706,9 +706,20 @@ class AStockTradingGraph:
             try:
                 # 尝试提取 JSON 块
                 # (round-9, L-core-5): [\s\S]* 贪婪匹配会吞掉后续内容，改非贪婪
+                # (round-10, M-core-1): 非贪婪 [\s\S]*?\} 在第一个 } 处停止，破坏嵌套 JSON
+                #   (如 {"decision": {"rating":"Buy"}} 缺少外层 })。改为双策略：
+                #   先非贪婪尝试，json.loads 失败则回退贪婪匹配最后一个 }。
                 json_match = re.search(r'\{[\s\S]*?"rating"[\s\S]*?\}', text)
                 if json_match:
-                    data = _json.loads(json_match.group(0))
+                    try:
+                        data = _json.loads(json_match.group(0))
+                    except _json.JSONDecodeError:
+                        # 非贪婪匹配失败（可能是嵌套 JSON），回退贪婪匹配
+                        json_match = re.search(r'\{[\s\S]*"rating"[\s\S]*\}', text)
+                        if json_match:
+                            data = _json.loads(json_match.group(0))
+                        else:
+                            raise
                     if "decision" in data:
                         data = data["decision"]
                     rating = data.get("rating", "Hold")

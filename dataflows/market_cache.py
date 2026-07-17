@@ -578,9 +578,17 @@ class MarketDataCache:
 
     def _atomic_write_text(self, path: Path, content: str):
         """原子写入文本文件（tmp + replace），避免进程崩溃产生损坏文件"""
+        # (round-10, M-opt-1): 加异常清理，避免 tmp 文件残留累积
         tmp = path.with_name(path.name + ".tmp")
-        tmp.write_text(content, encoding="utf-8")
-        tmp.replace(path)  # 原子操作（同文件系统下 os.replace）
+        try:
+            tmp.write_text(content, encoding="utf-8")
+            tmp.replace(path)  # 原子操作（同文件系统下 os.replace）
+        except Exception:
+            try:
+                tmp.unlink(missing_ok=True)
+            except Exception:
+                pass
+            raise
 
     def _save_disk(self, method: str, date: str, data: Any):
         """写入 MD（人类可读）+ JSON（跨会话恢复）"""
@@ -588,21 +596,21 @@ class MarketDataCache:
         json_path = md_path.with_suffix(".cache.json")
 
         # MD 给人类看
+        # (round-10, L-opt-3): 复用 _atomic_write_text，MD 写入也改原子，
+        # 避免进程崩溃产生截断 MD 文件。
         title = METHOD_TITLES.get(method, method)
         try:
-            md_path.write_text(to_markdown(data, f"{title} — {date}"), encoding="utf-8")
+            self._atomic_write_text(md_path, to_markdown(data, f"{title} — {date}"))
         except Exception as e:
             logger.warning(f"MD 写入失败 {date} {method}: {e}")
 
         # JSON 给程序恢复（DataFrame → list[dict]）
-        # M5: 原子写入 — 先写临时文件再 os.replace，避免并发写损坏缓存文件
+        # (round-10, L-opt-2/L-opt-3): 复用 _atomic_write_text，统一原子写入逻辑
         try:
-            tmp = json_path.with_name(json_path.name + ".tmp")
-            tmp.write_text(
+            self._atomic_write_text(
+                json_path,
                 json.dumps(_to_jsonable(data), ensure_ascii=False),
-                encoding="utf-8",
             )
-            tmp.replace(json_path)  # 原子操作（同文件系统下 os.replace）
             logger.info(f"💾 [缓存保存] {date} {method}")
         except Exception as e:
             logger.warning(f"JSON 写入失败 {date} {method}: {e}")

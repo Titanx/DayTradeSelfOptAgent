@@ -129,12 +129,12 @@ def main():
             net_pct = open_pct - 0.11  # 扣除成本
 
             should_buy = rating in ("Buy", "Overweight")
-            actually_up = open_pct >= TARGET_GAIN_PCT
-            # M-scripts-4 (round-9): STEP 基准改用 d1_open（买入价）→ d1_high（日内最高），
-            # 与 collector.py / batch_backtest.py 的 d1o 基准对齐
+            # (round-12, H-scripts-5): HIT 也用 high 基准（日内触达止盈线即 HIT），与 STEP 对称
+            # HIT=已建仓的止盈，STEP=未建仓的踏空，两者基准相同但语义不同
+            hit_trig = (d1_high / d1_open - 1) * 100 >= TARGET_GAIN_PCT
             step_trig = (d1_high / d1_open - 1) * 100 >= TARGET_GAIN_PCT
 
-            if should_buy and actually_up:
+            if should_buy and hit_trig:
                 verdict = "HIT"
             elif should_buy:
                 verdict = "MISS"

@@ -14,8 +14,18 @@ for f in sorted(os.listdir(overview_dir)):
             if isinstance(v, dict):
                 print(f"  {k}: close={v.get('close','?')}  pct_chg={v.get('pct_chg','?')}")
         sentiment = data.get("market_sentiment", {})
-        if isinstance(sentiment, dict):
-            print(f"  up={sentiment.get('up_count','?')} down={sentiment.get('down_count','?')}")
+        # (round-12, H-scripts-4): market_sentiment 存为 string（market_overview.py:73），改为尝试解析
+        try:
+            if isinstance(sentiment, str):
+                import re
+                up_match = re.search(r'up_count["\s:]+(\d+)', sentiment)
+                down_match = re.search(r'down_count["\s:]+(\d+)', sentiment)
+                if up_match and down_match:
+                    print(f"  up={up_match.group(1)} down={down_match.group(1)}")
+            elif isinstance(sentiment, dict):
+                print(f"  up={sentiment.get('up_count','?')} down={sentiment.get('down_count','?')}")
+        except Exception:
+            pass
         break
 
 print()
@@ -29,6 +39,16 @@ for f in sorted(os.listdir(overview_dir)):
             if isinstance(v, dict):
                 print(f"  {k}: close={v.get('close','?')}  pct_chg={v.get('pct_chg','?')}")
         sentiment = data.get("market_sentiment", {})
-        if isinstance(sentiment, dict):
-            print(f"  up={sentiment.get('up_count','?')} down={sentiment.get('down_count','?')}")
+        # (round-12, H-scripts-4): market_sentiment 存为 string（market_overview.py:73），改为尝试解析
+        try:
+            if isinstance(sentiment, str):
+                import re
+                up_match = re.search(r'up_count["\s:]+(\d+)', sentiment)
+                down_match = re.search(r'down_count["\s:]+(\d+)', sentiment)
+                if up_match and down_match:
+                    print(f"  up={up_match.group(1)} down={down_match.group(1)}")
+            elif isinstance(sentiment, dict):
+                print(f"  up={sentiment.get('up_count','?')} down={sentiment.get('down_count','?')}")
+        except Exception:
+            pass
         break

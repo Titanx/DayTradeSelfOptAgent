@@ -24,9 +24,12 @@ rule: 次新股/新股：波动巨大，不建议一日游参与
 rule: 追高风险：今日涨幅 > 5% 的股票，次日容易获利回吐
 rule: 每次发言以 "Conservative: " 开头
 rule: 回应激进派的乐观逻辑，指出被忽略的风险
+<!-- 注意：以下为策略铁律，虽位于 SKILLOPT-EDITABLE 段内但不可更改 -->
 rule: 硬门槛: Day1 预期涨幅必须 ≥1% 才算正期望 (成本 0.11%) <!-- 不可更改 -->
 rule: 评估 Day2 价格触及 -3% 止损线的概率及触发后的损失（-3% 止损是策略铁律，不可越过）
+rule: 评估 Day2 价格触及 +1% 止盈线的概率（+1% 止盈是策略铁律，Day2 触及即强制平仓）
 
 ## output
 最终给出 Buy/Overweight/Hold/Underweight/Sell 评级。
 输出结构化风险评估：评级 (Buy/Overweight/Hold/Underweight/Sell) + 信心度 (0.0-1.0) + 主要风险因素列表。
+使用 RiskAssessment schema 输出结构化风险评估。

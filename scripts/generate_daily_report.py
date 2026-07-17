@@ -104,6 +104,8 @@ lines.append("**Generated**: " + today.strftime("%Y-%m-%d %H:%M"))
 lines.append("**Strategy**: One-Day Swing (Day0 analyze -> Day1 buy -> Day2 force close)")
 # (round-9, L-scripts-4): 模型名从 config 读取，避免硬编码 DeepSeek-V4
 _d_cfg = get_config()
+# (round-12, C-scripts-3): 从 config 读取 target_gain_pct，避免硬编码 1.0
+TARGET_GAIN_PCT = _d_cfg.get("one_day_swing", {}).get("target_gain_pct", 1.0)
 lines.append("**Model**: " + str(_d_cfg.get("deep_think_llm", "?")) + "  temperature=" + str(_d_cfg.get("temperature", "?")))
 lines.append("**Target**: >=1% gain (net ~0.89% after 0.11% cost)")
 lines.append("")
@@ -206,7 +208,9 @@ if backtest_date:
                     if k[0] == backtest_date:
                         d0 = float(k[2])
                     if k[0] > backtest_date and d1 is None:
-                        d1 = {"open": float(k[1]), "close": float(k[2])}
+                        # (round-12, C-scripts-3): 补齐 high/low 字段，供 STEP high 基准使用
+                        d1 = {"open": float(k[1]), "close": float(k[2]),
+                              "high": float(k[3]), "low": float(k[4])}
                 if d0 is None or d1 is None:
                     continue
             except Exception:
@@ -217,13 +221,16 @@ if backtest_date:
             # 与 collector.py 的 d1_open 基准对齐，避免隔夜跳空与盘内涨跌混淆
             open_pct = (d1["close"] / d1["open"] - 1) * 100
             should_buy = bp["rating"] in ("Buy", "Overweight")
-            actually_up = open_pct >= 1.0
+            # (round-12, C-scripts-3): HIT 用 config 的 TARGET_GAIN_PCT（替换硬编码 1.0）
+            actually_up = open_pct >= TARGET_GAIN_PCT
+            # (round-12, C-scripts-3): STEP 改用 high 基准（日内触达止盈线即踏空），与 collector 对齐
+            step_trig = (d1["high"] / d1["open"] - 1) * 100 >= TARGET_GAIN_PCT
 
             if should_buy and actually_up:
                 v = "HIT"
             elif should_buy:
                 v = "MISS"
-            elif actually_up:
+            elif step_trig:
                 v = "STEP"
             else:
                 v = "AVOID"

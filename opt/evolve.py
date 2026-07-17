@@ -62,9 +62,18 @@ def _load_accuracy_history() -> List[Dict]:
 def _save_accuracy_history(history: List[Dict]):
     # (round-9) M-opt-4: 原子写入（tmp + replace），避免崩溃产生损坏 JSON 致使 _load_accuracy_history 返回 []
     # 复用 market_cache.py _save_disk 的同款模式
-    tmp = HISTORY_FILE.with_name(HISTORY_FILE.name + ".tmp")
-    tmp.write_text(json.dumps(history, ensure_ascii=False, indent=2), encoding="utf-8")
-    tmp.replace(HISTORY_FILE)  # 原子操作（同文件系统下 os.replace）
+    # (round-12, H-opt-6): 用 uuid tmp 避免多进程并发互相覆盖固定 tmp 文件名，并加异常清理
+    import uuid
+    tmp = HISTORY_FILE.with_name(f".{HISTORY_FILE.name}.{uuid.uuid4().hex[:8]}.tmp")
+    try:
+        tmp.write_text(json.dumps(history, ensure_ascii=False, indent=2), encoding="utf-8")
+        tmp.replace(HISTORY_FILE)  # 原子操作（同文件系统下 os.replace）
+    except Exception:
+        try:
+            tmp.unlink(missing_ok=True)
+        except Exception:
+            pass
+        raise
 
 
 def record_run(run_id: str, rollout_data: dict, edits_data: dict = None,
@@ -102,6 +111,8 @@ def record_run(run_id: str, rollout_data: dict, edits_data: dict = None,
         entry["gate_new_acc"] = gate_result.get("new_accuracy", 0)
         entry["gate_delta"] = gate_result.get("delta", 0)
 
+    # (round-12, H-opt-5): 此处 load-append-save 非原子，非线程安全
+    # pipeline 必须串行运行；若需并发，需引入文件锁（fcntl on Linux, msvcrt on Windows）
     history = _load_accuracy_history()
     history.append(entry)
     _save_accuracy_history(history)

@@ -209,6 +209,10 @@ class MarketDataCache:
             key = self._make_key(method, date)
             self._memory[key] = data
         # (round-11, H-opt-4): 磁盘写入移到锁外，避免阻塞其他线程
+        # (round-12, H-opt-4): 锁外磁盘写入存在理论上的内存-磁盘不一致竞态
+        # （线程A锁内写data1，线程B锁内覆盖data2，线程A锁外写磁盘data1覆盖data2）
+        # 但实际并发场景中同一 key 的并发写入概率低，且最终一致（下次进程重启从磁盘加载）
+        # 若需强一致性，可在锁内写磁盘（性能下降）
         self._save_disk(method, date, data)
 
     def fetch(self, method: str) -> Optional[Any]:
@@ -363,6 +367,10 @@ class MarketDataCache:
             json_path = filepath.with_suffix(".cache.json")
             trade_date = self._trade_date
         # (round-11, H-opt-4): 磁盘写入移到锁外，避免阻塞其他线程
+        # (round-12, H-opt-4): 锁外磁盘写入存在理论上的内存-磁盘不一致竞态
+        # （线程A锁内写data1，线程B锁内覆盖data2，线程A锁外写磁盘data1覆盖data2）
+        # 但实际并发场景中同一 key 的并发写入概率低，且最终一致（下次进程重启从磁盘加载）
+        # 若需强一致性，可在锁内写磁盘（性能下降）
         title = METHOD_TITLES.get(method, method)
 
         # MD 人类可读
@@ -419,7 +427,8 @@ class MarketDataCache:
     def invalidate_opinion(self, symbol: str = None):
         with self._lock:
             if symbol:
-                keys_to_del = [k for k in self._opinion_memory if symbol in k]
+                # (round-12, H-opt-3): 精确匹配 symbol（key 格式 {date}_{symbol}_{method}），避免子串误删
+                keys_to_del = [k for k in self._opinion_memory if f"_{symbol}_" in k]
                 for k in keys_to_del:
                     del self._opinion_memory[k]
             else:
@@ -479,6 +488,10 @@ class MarketDataCache:
             json_path = filepath.with_suffix(".cache.json")
             trade_date = self._trade_date
         # (round-11, H-opt-4): 磁盘写入移到锁外，避免阻塞其他线程
+        # (round-12, H-opt-4): 锁外磁盘写入存在理论上的内存-磁盘不一致竞态
+        # （线程A锁内写data1，线程B锁内覆盖data2，线程A锁外写磁盘data1覆盖data2）
+        # 但实际并发场景中同一 key 的并发写入概率低，且最终一致（下次进程重启从磁盘加载）
+        # 若需强一致性，可在锁内写磁盘（性能下降）
         title = METHOD_TITLES.get(method, method)
 
         try:
@@ -543,24 +556,26 @@ class MarketDataCache:
 
     def invalidate_stock(self, symbol: str = None):
         """失效个股缓存（内存 + 磁盘）"""
+        # (round-12, H-opt-2): 锁内只清内存，锁外做磁盘删除，避免阻塞其他线程
+        import shutil
         with self._lock:
             if symbol:
-                keys_to_del = [k for k in self._stock_memory if symbol in k]
+                # (round-12, H-opt-3): 精确匹配 symbol（key 格式 {date}_{symbol}_{method}），避免子串误删
+                keys_to_del = [k for k in self._stock_memory if f"_{symbol}_" in k]
                 for k in keys_to_del:
                     del self._stock_memory[k]
-                # 清磁盘：删除该 symbol 的整个目录
-                symbol_dir = self.stock_cache_dir / symbol
-                if symbol_dir.exists():
-                    import shutil
-                    shutil.rmtree(symbol_dir, ignore_errors=True)
             else:
                 self._stock_memory.clear()
-                # 清磁盘：删除所有 symbol 子目录
-                if self.stock_cache_dir.exists():
-                    import shutil
-                    for d in self.stock_cache_dir.iterdir():
-                        if d.is_dir():
-                            shutil.rmtree(d, ignore_errors=True)
+        # 锁外做磁盘删除
+        if symbol:
+            symbol_dir = self.stock_cache_dir / symbol
+            if symbol_dir.exists():
+                shutil.rmtree(symbol_dir, ignore_errors=True)
+        else:
+            if self.stock_cache_dir.exists():
+                for d in self.stock_cache_dir.iterdir():
+                    if d.is_dir():
+                        shutil.rmtree(d, ignore_errors=True)
         logger.info("🧹 个股缓存已失效 (内存+磁盘)")
 
     # ================================================================

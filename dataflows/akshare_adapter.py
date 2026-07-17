@@ -615,7 +615,7 @@ def get_concept_boards() -> Optional[pd.DataFrame]:
     except Exception:
         pass
     try:
-        return ak.stock_board_concept_cons_ths()
+        return ak.stock_board_concept_summary_ths()  # (round-12, H-opt-1): 修正接口名，cons_ths 不存在
     except Exception:
         pass
     return None

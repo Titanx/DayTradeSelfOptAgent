@@ -14,7 +14,7 @@
   - 解耦: 数据获取与 agent 辩论完全分离
 """
 
-import sys, time, os, logging, json, argparse, random
+import sys, time, os, logging, json, argparse, random, copy
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from threading import Lock
@@ -67,10 +67,11 @@ def is_done(code, trade_date, version=""):
         try:
             d = json.loads(cache_file.read_text("utf-8"))
             if d.get("rating", "ERR") != "ERR":
-                return True, d["rating"]
+                # (round-12, C-scripts-4): 同时返回 position_pct，供归一化使用
+                return True, d["rating"], d.get("position_pct")
         except Exception:
             pass
-    return False, None
+    return False, None, None
 
 
 def get_next_trade_date(date_str: str) -> str:
@@ -188,6 +189,9 @@ def compute_sector_momentum() -> dict:
         return {}
 
     today_entries = data.get("today", [])
+    # (round-12, H-scripts-2): 类型校验，避免非 list（None/string/dict）导致主流程崩溃
+    if not isinstance(today_entries, list):
+        return {}
     if not today_entries:
         return {}
 
@@ -332,9 +336,10 @@ def main():
         if args.fresh:
             todo.append((code, name, sector))
         else:
-            done, rating = is_done(code, trade_date, agent_version)
+            done, rating, pos_pct = is_done(code, trade_date, agent_version)
             if done:
-                skipped.append((code, name, sector, rating))
+                # (round-12, C-scripts-4): skipped 元组带上 position_pct（从 cache 读取）
+                skipped.append((code, name, sector, rating, pos_pct))
             else:
                 todo.append((code, name, sector))
 
@@ -431,7 +436,8 @@ def main():
 
     def analyze_one(code, name, sector, idx, total):
         t0 = time.time()
-        cfg = dict(config)
+        # (round-12, H-scripts-1): 用 deepcopy 替代浅拷贝，避免嵌套 dict 跨线程共享
+        cfg = copy.deepcopy(config)
         cfg["market_overview"] = shared_overview
         cfg["market_direction"] = market_direction
         cfg["sector_momentum"] = sector_momentum.get(sector, "")
@@ -444,6 +450,8 @@ def main():
 
             # H4 硬过滤：ST/流动性/跌停/停牌 — 双保险（trading_graph 内已过滤，此处再校验）
             rating = result.get("rating", "?")
+            # (round-12, C-scripts-1): 记录原始评级，hard_filter 修改后需重新写回 cache
+            original_rating = rating
             if rating in ("Buy", "Overweight"):
                 try:
                     from agents.utils.agent_utils import hard_filter_stock
@@ -458,6 +466,14 @@ def main():
                             print(f"   ⚠️ 硬过滤拦截 {code} {name}: {reason} → Hold")
                 except Exception as hf_err:
                     logging.warning(f"硬过滤执行失败 [{code}]: {hf_err}")
+
+            # (round-12, C-scripts-1): hard_filter 修改 result 后必须重新写回 cache，
+            # 否则下次 is_done 读到旧评级（如 Buy），hard_filter 完全失效
+            if result.get("rating") != original_rating:
+                try:
+                    agent._save_result(result)
+                except Exception as save_err:
+                    logging.warning(f"重写 cache 失败 [{code}]: {save_err}")
 
             conf = result.get("confidence", 0)
             pos = result.get("position_pct")
@@ -493,7 +509,9 @@ def main():
     ok_count = sum(1 for r in results if r["ok"])
 
     # --- Summary ---
-    all_results = [{"code": c, "name": n, "sector": s, "rating": r, "conf": 0, "ok": True} for c,n,s,r in skipped]
+    # (round-12, C-scripts-4): skipped 项带上 position_pct（从 cache 读取），参与归一化
+    all_results = [{"code": c, "name": n, "sector": s, "rating": r, "conf": 0, "ok": True,
+                    "position_pct": p} for c,n,s,r,p in skipped]
     all_results += [{"code": c, "name": n, "sector": s, "rating": "ERR", "conf": 0, "ok": False}
                     for c, n, s, _ in skipped_data]
     all_results += results
@@ -512,13 +530,13 @@ def main():
 
     # 仓位归一化：Buy/Overweight 的 position_pct 等比压缩至总仓 ≤ 100%
     max_pos = config.get("max_position_pct", 0.2)
-    # M2: 先给 Buy 项无 position 的补默认值（原 elif 分支因 truthy 过滤永远进不去）
-    for r in all_results:
+    # (round-12, C-scripts-4): 只对本次新跑的 results 补默认仓位，skipped 项用 cache 中的历史仓位
+    for r in results:
         if r["rating"] in ("Buy", "Overweight") and r.get("position_pct") is None:
             r["position_pct"] = max_pos
 
-    # (round-11, H-scripts-1): 仓位归一化只针对本次新跑的 results，不含 skipped/skipped_data
-    buy_items = [r for r in results if r["rating"] in ("Buy", "Overweight") and r.get("position_pct")]
+    # (round-12, C-scripts-4): 归一化含 skipped Buy（恢复 all_results），避免总仓 > 100%
+    buy_items = [r for r in all_results if r["rating"] in ("Buy", "Overweight") and r.get("position_pct")]
     total_raw = sum(r["position_pct"] for r in buy_items)
     if total_raw > 1.0:
         # 等比压缩

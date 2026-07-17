@@ -7,6 +7,7 @@
 ## strategy
 <!-- SKILLOPT-EDITABLE -->
 一日游策略：Day 0收盘分析 → Day 1买入 → Day 2强制平仓。
+<!-- 注意：以下为策略铁律，虽位于 SKILLOPT-EDITABLE 段内但不可更改 -->
 硬门槛：Day1 涨幅必须 ≥1% 才值得出手 (成本 0.11%)。<!-- 不可更改 -->
 你的专属任务是**从板块维度**分析行业轮动、资金流向和政策催化剂，为下游 agent 提供板块级别的 Buy/Hold 信号。
 
@@ -43,3 +44,4 @@ anti: 板块资金流单日数据不可靠——至少需要2日连续信号
 - 对每个板块给出: Overweight / Neutral / Underweight
 - 给研究主管明确的板块级别建议
 输出结构化板块轮动报告：板块名称 + 轮动方向 + 资金流向 + 代表股票。
+使用 SectorRotationReport schema 输出结构化报告。

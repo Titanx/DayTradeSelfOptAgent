@@ -61,9 +61,13 @@ def get_kline_data(code):
 
 def load_prediction(code):
     for f in RESULTS_DIR.glob(f"{code}_{D0_DATE}_*analysis.cache.json"):
-        d = json.loads(f.read_text(encoding="utf-8"))
-        return {"symbol":d.get("symbol",code),"stock_name":d.get("stock_name",""),
-                "rating":d.get("rating","?"),"confidence":d.get("confidence",0)}
+        # (round-12, H-scripts-3): 容错损坏的 cache 文件，避免整个脚本崩溃
+        try:
+            d = json.loads(f.read_text(encoding="utf-8"))
+            return {"symbol":d.get("symbol",code),"stock_name":d.get("stock_name",""),
+                    "rating":d.get("rating","?"),"confidence":d.get("confidence",0)}
+        except Exception:
+            return None
     return None
 
 

@@ -371,20 +371,26 @@ class AStockTradingGraph:
         # 不再写回 self.config（config 应保持只读），避免跨日批处理时复用旧交易日的市场方向。
         if not hasattr(self, '_market_direction_cache'):
             self._market_direction_cache = {}
+        # (round-12, H-core-2): market_overview 也用实例级缓存，避免同 trade_date 第二次调用丢失
+        if not hasattr(self, '_market_overview_cache'):
+            self._market_overview_cache = {}
         market_direction = self._market_direction_cache.get(trade_date, "")
         # (round-11, M-core-3): market_overview 同步惰性计算，让 PM 能看到大盘背景
-        market_overview = self.config.get("market_overview", "")
-        if not market_direction:
+        market_overview = self._market_overview_cache.get(trade_date, "") or self.config.get("market_overview", "")
+        if not market_direction or not market_overview:
             try:
                 from scripts.batch_predict import compute_market_signal
                 from scripts.market_overview import load_overview
                 # load_overview 返回 dict，自动从 overview_cache/{trade_date}_overview.json 读取或实时拉取
                 overview_dict = load_overview(trade_date)
                 if overview_dict:
-                    market_direction = compute_market_signal(overview_dict)
+                    if not market_direction:
+                        market_direction = compute_market_signal(overview_dict)
                     # (round-11, M-core-3): 同步设置 market_overview，让 PM 能看到大盘背景
+                    # (round-12, H-core-2): 缓存到实例级，避免跨调用丢失
                     if not market_overview:
                         market_overview = str(overview_dict)
+                        self._market_overview_cache[trade_date] = market_overview
                     if market_direction:
                         self._market_direction_cache[trade_date] = market_direction
                         logger.info(f"market_direction 惰性计算: {market_direction[:80]}")
@@ -432,6 +438,8 @@ class AStockTradingGraph:
         rating, action, confidence = self._parse_decision(decision_text)
 
         # H4 硬过滤：ST/流动性/跌停/停牌 — 仅拦截 Buy/Overweight
+        # (round-12, C-core-1): 引入 hard_filtered flag，避免 position_pct=0.0 被后续重新解析覆盖
+        hard_filtered = False
         if rating in ("Buy", "Overweight"):
             try:
                 from agents.utils.agent_utils import hard_filter_stock
@@ -443,8 +451,8 @@ class AStockTradingGraph:
                     # (round-11, H-core-1): 硬过滤后必须清零 position_pct 和 confidence，
                     # 否则下游（batch_backtest/collector）可能根据 position_pct>0 实际建仓，
                     # 违反硬过滤意图
-                    position_pct = 0.0
                     confidence = 0.0
+                    hard_filtered = True
                     decision_text = (decision_text or "") + \
                         f"\n\n**硬过滤**: {reason} → 强制 Hold"
             except Exception as e:
@@ -462,30 +470,34 @@ class AStockTradingGraph:
         # 解析仓位建议（从决策文本）
         # C1: 支持 Markdown 格式（**Position**: 20%）和 JSON 回退格式（"position": 15）
         # H1: 单位识别改用 % 符号判断，而非 val > 1.0（后者会误判 1% 为 100%）
-        position_pct = None
-        try:
-            # 路径1: Markdown 格式（结构化输出成功时 render_portfolio_decision 生成）
-            # 用 % 符号判断单位：有 % 是百分数（如 20% → 0.2），无 % 是比例（如 0.2 → 0.2）
-            pos_match = re.search(r'\*\*Position\*\*:\s*([\d.]+)(%)?', decision_text)
-            if pos_match:
-                val = float(pos_match.group(1))
-                has_pct = pos_match.group(2) == "%"
-                position_pct = val / 100.0 if has_pct else val
-            else:
-                # 路径2: JSON 格式（结构化输出失败回退到自由文本时 LLM 可能输出 JSON）
-                # JSON 中的 position 值无法通过 % 符号判断，用 >1.0 启发式（JSON 通常输出百分数）
-                json_match = re.search(r'"position(?:_pct)?":\s*([\d.]+)', decision_text)
-                if json_match:
-                    val = float(json_match.group(1))
-                    # (round-9, L-core-4): val=1.0 是歧义边界（可能 1% 或 100%）。
-                    # PortfolioDecision schema 有 le=0.2 约束，正常 LLM 输出 ≤0.2，不触发此回退。
-                    position_pct = val / 100.0 if val > 1.0 else val
-            if position_pct is not None:
-                # 硬约束：单票 ≤ 20%
-                max_pos = self.config.get("max_position_pct", 0.2)
-                position_pct = min(position_pct, max_pos)
-        except Exception:
-            pass
+        # (round-12, C-core-1): 硬过滤拦截时跳过解析，强制 position_pct=0.0
+        if hard_filtered:
+            position_pct = 0.0
+        else:
+            position_pct = None
+            try:
+                # 路径1: Markdown 格式（结构化输出成功时 render_portfolio_decision 生成）
+                # 用 % 符号判断单位：有 % 是百分数（如 20% → 0.2），无 % 是比例（如 0.2 → 0.2）
+                pos_match = re.search(r'\*\*Position\*\*:\s*([\d.]+)(%)?', decision_text)
+                if pos_match:
+                    val = float(pos_match.group(1))
+                    has_pct = pos_match.group(2) == "%"
+                    position_pct = val / 100.0 if has_pct else val
+                else:
+                    # 路径2: JSON 格式（结构化输出失败回退到自由文本时 LLM 可能输出 JSON）
+                    # JSON 中的 position 值无法通过 % 符号判断，用 >1.0 启发式（JSON 通常输出百分数）
+                    json_match = re.search(r'"position(?:_pct)?":\s*([\d.]+)', decision_text)
+                    if json_match:
+                        val = float(json_match.group(1))
+                        # (round-9, L-core-4): val=1.0 是歧义边界（可能 1% 或 100%）。
+                        # PortfolioDecision schema 有 le=0.2 约束，正常 LLM 输出 ≤0.2，不触发此回退。
+                        position_pct = val / 100.0 if val > 1.0 else val
+                if position_pct is not None:
+                    # 硬约束：单票 ≤ 20%
+                    max_pos = self.config.get("max_position_pct", 0.2)
+                    position_pct = min(position_pct, max_pos)
+            except Exception:
+                pass
 
         result = {
             "symbol": symbol,
@@ -653,7 +665,8 @@ class AStockTradingGraph:
                     d2_open = price_map[d2_date][0]    # Day2 开盘
                     if d2_open <= stop_price:
                         # 开盘即止损
-                        raw_return = -stop_loss_pct
+                        # (round-12, H-core-1): 用真实损失而非固定 -3%，避免穿仓只记 -3% 污染记忆系统
+                        raw_return = round((d2_open / d1_open - 1) * 100, 2)
                         hint = "开盘止损"
                         exit_price = d2_open
                     elif d2_high >= hit_price:
@@ -760,10 +773,13 @@ class AStockTradingGraph:
                 logger.debug(f"JSON 决策解析失败，使用默认值: {e}")
 
         # 3. 标准化
+        # (round-12, H-core-3): 补充常见卖方评级映射，避免 Outperform/Neutral 等无法归一化
         rating_map = {
             "buy": "Buy", "overweight": "Overweight", "hold": "Hold",
             "underweight": "Underweight", "sell": "Sell",
             "strong buy": "Buy", "strong sell": "Sell",
+            "outperform": "Buy", "in-line": "Hold", "neutral": "Hold",
+            "accumulate": "Buy", "add": "Buy", "reduce": "Sell",
         }
         rating = rating_map.get(rating.lower(), rating.title())
 

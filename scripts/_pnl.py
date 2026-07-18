@@ -45,11 +45,17 @@ for label, signals in ROUNDS.items():
         print(f"  {label:<6} {code} {name:<6} {close_p:>+7.2f}%   {m3}{p3:>+6.2f}%   {m5}{p5:>+6.2f}%   {how3:<16} {how5}")
     print(f"  {'─'*6} {'─'*10} {'─'*9} {'─'*9} {'─'*9} {'─'*16} {'─'*16}")
     n=len(signals)
+    if n == 0:
+        print(f"  {label}: 无信号")
+        continue
     print(f"  {label:<6} 平均        {r3/n:>+6.2f}%   {r5/n:>+6.2f}%")
     print()
     tot3+=r3; tot5+=r5
 
 total_signals=sum(len(s) for s in ROUNDS.values())
+if total_signals == 0:
+    print("无信号")
+    raise SystemExit
 print(f"  {'合计':<6} {total_signals}只信号       {tot3/total_signals:>+6.2f}%   {tot5/total_signals:>+6.2f}%  (每信号平均)")
 print()
 

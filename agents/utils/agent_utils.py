@@ -803,6 +803,7 @@ def get_global_macro_data() -> str:
     lines.append("")
 
     # --- 缓存键 ---
+    cache = None
     try:
         from dataflows.market_cache import MarketDataCache
         cache = MarketDataCache.get_instance()
@@ -821,12 +822,13 @@ def get_global_macro_data() -> str:
             trade_date = datetime.now(_BJ_TIME).strftime("%Y-%m-%d")
 
     cache_key = f"global_macro_{trade_date}"
-    try:
-        cached = cache.get_public_data(cache_key)
-        if cached:
-            return cached
-    except Exception as e:
-        logger.debug(f"读取 global_macro 缓存失败: {e}")
+    if cache is not None:
+        try:
+            cached = cache.get_public_data(cache_key)
+            if cached:
+                return cached
+        except Exception as e:
+            logger.debug(f"读取 global_macro 缓存失败: {e}")
 
     # ============================================================
     # M6: 美股时区对齐 — 美东时间 9:30-16:00 = 北京时间 21:30-04:00 (夏令时) / 22:30-05:00 (冬令时)

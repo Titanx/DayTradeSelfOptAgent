@@ -9,7 +9,11 @@ print(f"总计: {len(files)}/25 完成\n")
 # (round-9, L-scripts-1): 删除 by_sector/sector 死代码；直接键访问改 .get() 防 KeyError
 by_rating = {}
 for f in files:
-    d = json.loads(f.read_text(encoding="utf-8"))
+    try:
+        d = json.loads(f.read_text(encoding="utf-8"))
+    except Exception as e:
+        print(f"  [skip] {f.name}: {e}")
+        continue
     s = d.get("symbol", "?")
     rating = d.get("rating", "?")
     stock_name = d.get("stock_name", "")

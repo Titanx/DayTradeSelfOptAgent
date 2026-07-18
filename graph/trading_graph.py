@@ -496,8 +496,8 @@ class AStockTradingGraph:
                     # 硬约束：单票 ≤ 20%
                     max_pos = self.config.get("max_position_pct", 0.2)
                     position_pct = min(position_pct, max_pos)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"position_pct 解析失败 [{symbol}]: {e}")
 
         result = {
             "symbol": symbol,
@@ -896,6 +896,10 @@ class AStockTradingGraph:
                 logger.error(f"分析失败 [{symbol}]: {e}")
                 results.append({
                     "symbol": symbol, "trade_date": trade_date,
-                    "error": str(e), "rating": "Hold", "action": "Hold",
+                    "stock_name": name, "error": str(e),
+                    "rating": "Hold", "action": "Hold",
+                    "confidence": 0.0, "position_pct": 0.0,
+                    "reports": {}, "decision": "",
+                    "debate_rounds": 0, "risk_rounds": 0, "messages_count": 0,
                 })
         return results

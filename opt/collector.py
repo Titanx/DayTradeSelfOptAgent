@@ -123,7 +123,11 @@ def get_kline(sid):
                 time.sleep(1 * (attempt + 1))
                 continue
             raise
-    data = json.loads(resp.read().decode("utf-8"))["data"][sid]
+    data = json.loads(resp.read().decode("utf-8"))
+    # M-df-11: 用 .get() 链式访问，避免 JSON 缺 data/sid 字段时 KeyError 被外层吞掉
+    data = (data.get("data") or {}).get(sid)
+    if data is None:
+        return {}
     raw = data.get("qfqday") or data.get("day", [])
     # k 格式: [date, open, close, high, low, ...]
     # M6: 完整性校验 — len≥5 + OHLC 逻辑校验
@@ -148,7 +152,11 @@ def _classify(verdict_rating: str, d1_open: float, d2_high: float,
 
     actual_return_pct 是模拟止盈止损后的实际收益，非收盘价差。
     M1: 删除 d0_close 参数（H1 修复后 STEP 改用 d1_open，d0_close 不再使用）
+    M-df-10: 在函数开头加边界保护，避免 d1_open<=0 时除零（原 else 分支才检查）
     """
+    if d1_open <= 0:
+        return ("FLAT", 0.0) if verdict_rating in ("Buy", "Overweight") else ("AVOID", 0.0)
+
     is_bull = verdict_rating in ("Buy", "Overweight")
     hit_price = d1_open * (1 + TARGET_GAIN_PCT / 100.0)   # +1% 止盈
     stop_price = d1_open * (1 - STOP_LOSS_PCT / 100.0)    # -3% 止损
@@ -193,6 +201,20 @@ def collect(date_list: List[str]) -> dict:
             }
         }
     """
+    # M-df-9: 空列表保护，避免 date_list[0] 抛 IndexError
+    if not date_list:
+        return {
+            "date_range": "",
+            "collected_at": datetime.now().isoformat(),
+            "skill_files": {},
+            "rollout_results": [],
+            "group_summary": {
+                "by_sector": {},
+                "by_error_type": {},
+                "overall": {"total": 0, "accuracy": 0},
+            },
+        }
+
     date_range = "{} ~ {}".format(date_list[0], date_list[-1])
 
     # 读取当前 skill 文件 (供 optimizer 参考)

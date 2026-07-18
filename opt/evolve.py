@@ -30,6 +30,7 @@ import json
 import os
 import re
 import sys
+import time
 from pathlib import Path
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple
@@ -383,27 +384,35 @@ def discover(history: List[Dict] = None, force: bool = False) -> dict:
             except Exception:
                 pass
         # 回退：直接 HTTP 调用 DeepSeek
-        resp = requests.post(
-            "{}/chat/completions".format(base_url.rstrip("/")),
-            headers={
-                "Authorization": "Bearer {}".format(api_key),
-                "Content-Type": "application/json",
-            },
-            json={
-                "model": model,
-                "messages": [
-                    {"role": "system", "content": system},
-                    {"role": "user", "content": user},
-                ],
-                "temperature": config.get("temperature", 0.1),
-                "max_tokens": 3000,
-                "response_format": {"type": "json_object"},
-            },
-            timeout=120,
-        )
-        resp.raise_for_status()
-        data = resp.json()
-        return data["choices"][0]["message"]["content"]
+        # M-df-18: 包 try-except 加重试，避免网络抖动直接失败
+        for http_attempt in range(3):
+            try:
+                resp = requests.post(
+                    "{}/chat/completions".format(base_url.rstrip("/")),
+                    headers={
+                        "Authorization": "Bearer {}".format(api_key),
+                        "Content-Type": "application/json",
+                    },
+                    json={
+                        "model": model,
+                        "messages": [
+                            {"role": "system", "content": system},
+                            {"role": "user", "content": user},
+                        ],
+                        "temperature": config.get("temperature", 0.1),
+                        "max_tokens": 3000,
+                        "response_format": {"type": "json_object"},
+                    },
+                    timeout=120,
+                )
+                resp.raise_for_status()
+                data = resp.json()
+                return data["choices"][0]["message"]["content"]
+            except (requests.ConnectionError, requests.Timeout) as e:
+                if http_attempt < 2:
+                    time.sleep(2 ** http_attempt)
+                    continue
+                raise
 
     system_prompt = """You are an Agent Architecture Analyst for a multi-agent stock trading system.
 

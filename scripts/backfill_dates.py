@@ -27,12 +27,13 @@ def main():
     sid0 = "sz300750"
     # M-scripts-6 (round-9): 网络调用加 try/except，失败时打印并返回，不再让脚本崩溃
     try:
-        klines = json.loads(urllib.request.urlopen(
+        with urllib.request.urlopen(
             urllib.request.Request(
                 f"http://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param={sid0},day,,,60,qfq",
                 headers={"User-Agent": "Mozilla/5.0"}
             ), timeout=10
-        ).read().decode("utf-8"))["data"][sid0]["qfqday"]
+        ) as resp:
+            klines = json.loads(resp.read().decode("utf-8"))["data"][sid0]["qfqday"]
     except Exception as e:
         print(f"❌ 拉取 {sid0} K线失败: {e}")
         return

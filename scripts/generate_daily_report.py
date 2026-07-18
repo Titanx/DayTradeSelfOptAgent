@@ -52,8 +52,8 @@ def load_predictions(date_str):
                     d["symbol"] = code
                 if code not in preds:
                     preds[code] = d
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"  [warn] 跳过损坏的缓存 {f.name}: {e}", file=sys.stderr)
     return preds
 
 

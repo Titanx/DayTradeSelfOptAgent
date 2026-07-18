@@ -16,8 +16,11 @@ from pathlib import Path
 from typing import Dict, Optional
 
 PROJECT_DIR = Path(__file__).parent.parent
+sys.path.insert(0, str(PROJECT_DIR))
 OPT_DIR = PROJECT_DIR / "opt"
 BUFFER_PATH = OPT_DIR / "input" / "rejected_buffer.json"
+
+from opt.utils import atomic_write_text
 
 
 def load_rejected_buffer() -> list:
@@ -32,7 +35,7 @@ def save_rejected_buffer(buf: list):
     #     如需让 optimizer 参考历史拒绝以避免重复提案，需在 optimizer 中
     #     主动调用 load_rejected_buffer() 注入上下文。
     BUFFER_PATH.parent.mkdir(parents=True, exist_ok=True)
-    BUFFER_PATH.write_text(json.dumps(buf, ensure_ascii=False, indent=2), encoding="utf-8")
+    atomic_write_text(BUFFER_PATH, json.dumps(buf, ensure_ascii=False, indent=2))
 
 
 def gate(old_accuracy: float, new_accuracy: float,
@@ -97,7 +100,7 @@ def gate(old_accuracy: float, new_accuracy: float,
     # 保存 gate 结果
     (OPT_DIR / "output").mkdir(parents=True, exist_ok=True)
     gate_path = OPT_DIR / "output" / "gate_result.json"
-    gate_path.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
+    atomic_write_text(gate_path, json.dumps(result, ensure_ascii=False, indent=2))
 
     return result
 

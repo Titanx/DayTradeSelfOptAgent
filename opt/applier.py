@@ -16,6 +16,7 @@
 
 import json
 import shutil
+import uuid
 from datetime import datetime
 from pathlib import Path
 from typing import List
@@ -32,9 +33,10 @@ def _atomic_write_text(path, content):
 
     (round-10, M-opt-6): skill 文件与 applied.json 均为核心配置，
     非原子写入中途崩溃会产生截断文件，导致后续加载失败。
+    (M-df-17): 用 uuid tmp 文件名避免并发写同一文件时 TOCTOU 竞态。
     """
     path = Path(path)
-    tmp = path.with_name(path.name + ".tmp")
+    tmp = path.with_name(f".{path.name}.{uuid.uuid4().hex[:8]}.tmp")
     try:
         tmp.write_text(content, encoding="utf-8")
         tmp.replace(path)

@@ -28,9 +28,10 @@ STOCKS = [
 def get_kline(sid):
     url = f"http://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param={sid},day,,,30,qfq"
     req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-    resp = urllib.request.urlopen(req, timeout=10)
-    data = json.loads(resp.read().decode("utf-8"))
-    return data["data"][sid]["qfqday"]
+    with urllib.request.urlopen(req, timeout=10) as resp:
+        data = json.loads(resp.read().decode("utf-8"))
+    klines = data["data"][sid].get("qfqday") or data["data"][sid].get("day", [])
+    return klines
 
 
 def main():

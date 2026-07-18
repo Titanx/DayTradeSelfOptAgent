@@ -53,11 +53,11 @@ def get_klines(code):
     url = f"http://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param={sid},day,,,12,qfq"
     req = urllib.request.Request(url, headers={"User-Agent":"Mozilla/5.0"})
     try:
-        resp = urllib.request.urlopen(req, timeout=10)
-        data = json.loads(resp.read().decode("utf-8"))["data"][sid]
-        # (open, close, high, low)
-        return {k[0]:(float(k[1]),float(k[2]),float(k[3]),float(k[4]))
-                for k in (data.get("qfqday") or data.get("day",[]))}
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = json.loads(resp.read().decode("utf-8"))["data"][sid]
+            # (open, close, high, low)
+            return {k[0]:(float(k[1]),float(k[2]),float(k[3]),float(k[4]))
+                    for k in (data.get("qfqday") or data.get("day",[]))}
     except Exception as e:
         print(f"  拉取 {code} K线失败: {e}")
         return {}

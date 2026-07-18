@@ -17,13 +17,17 @@ SkillOpt Step 2b: 对 aggregate 后的编辑进行多维评分，只保留得分
 
 import json
 import re
+import sys
 from pathlib import Path
 from datetime import datetime
 from typing import Dict, List
 
 PROJECT_DIR = Path(__file__).parent.parent
+sys.path.insert(0, str(PROJECT_DIR))
 OUTPUT_DIR = PROJECT_DIR / "opt" / "output"
 INPUT_DIR = PROJECT_DIR / "opt" / "input"
+
+from opt.utils import atomic_write_text
 
 FILE_PRIORITY = {
     "research_manager": 15,
@@ -67,7 +71,7 @@ def _score_error_backing(edit: dict, rollout: dict) -> float:
     by_sector = summary.get("by_sector", {})
 
     for sector, kw_list in SECTOR_KEYWORDS.items():
-        if any(kw in text for kw in kw_list):
+        if any(kw.lower() in text for kw in kw_list):
             sector_data = by_sector.get(sector, {})
             miss = sector_data.get("miss", 0)
             step = sector_data.get("step", 0)
@@ -149,7 +153,7 @@ def select(edits_data: dict, top_k: int = 3, rollout_data: dict = None) -> dict:
             "timestamp": datetime.now().isoformat(),
         }
         output_path = OUTPUT_DIR / "edits_selected.json"
-        output_path.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
+        atomic_write_text(output_path, json.dumps(result, ensure_ascii=False, indent=2))
         print("Select: {} edits ≤ top-k({}), all passed through".format(len(edits), top_k))
         return result
 
@@ -193,7 +197,7 @@ def select(edits_data: dict, top_k: int = 3, rollout_data: dict = None) -> dict:
     }
 
     output_path = OUTPUT_DIR / "edits_selected.json"
-    output_path.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
+    atomic_write_text(output_path, json.dumps(result, ensure_ascii=False, indent=2))
 
     print("Select: {} edits → {} selected (top-k={})".format(len(edits), len(selected_edits), top_k))
     print("Score ranking:")

@@ -123,9 +123,9 @@ def render_fundamental_report(report: FundamentalReport) -> str:
     return f"""**Rating**: {report.rating.value}
 
 **Key Metrics**:
-- ROE: {report.roe if report.roe else 'N/A'}
-- Revenue Growth: {report.revenue_growth if report.revenue_growth else 'N/A'}
-- PE(TTM): {report.pe_ttm if report.pe_ttm else 'N/A'}
+- ROE: {report.roe if report.roe is not None else 'N/A'}
+- Revenue Growth: {report.revenue_growth if report.revenue_growth is not None else 'N/A'}
+- PE(TTM): {report.pe_ttm if report.pe_ttm is not None else 'N/A'}
 
 **Strengths**: {', '.join(report.key_strengths) if report.key_strengths else 'N/A'}
 **Risks**: {', '.join(report.key_risks) if report.key_risks else 'N/A'}
@@ -137,8 +137,8 @@ def render_technical_report(report: TechnicalReport) -> str:
     return f"""**Rating**: {report.rating.value}
 
 **Trend**: {report.trend}
-**Support**: {report.support_level if report.support_level else 'N/A'}
-**Resistance**: {report.resistance_level if report.resistance_level else 'N/A'}
+**Support**: {report.support_level if report.support_level is not None else 'N/A'}
+**Resistance**: {report.resistance_level if report.resistance_level is not None else 'N/A'}
 
 **Key Signals**: {', '.join(report.key_signals) if report.key_signals else 'N/A'}
 
@@ -161,7 +161,7 @@ def render_policy_report(report: PolicyReport) -> str:
 
 **Policy Impact**: {report.policy_impact}
 **Key Policies**: {', '.join(report.key_policies) if report.key_policies else 'N/A'}
-**Sector Rotation**: {report.sector_rotation_hint if report.sector_rotation_hint else 'N/A'}
+**Sector Rotation**: {report.sector_rotation_hint if report.sector_rotation_hint is not None else 'N/A'}
 
 **Summary**: {report.summary}"""
 
@@ -204,6 +204,6 @@ def render_portfolio_decision(decision: PortfolioDecision) -> str:
     lines.append(f"\n**Investment Thesis**: {decision.investment_thesis}")
     if decision.key_risks:
         lines.append(f"\n**Key Risks**: {', '.join(decision.key_risks)}")
-    lines.append(f"\n---")
+    lines.append("\n---")
     lines.append(f"*策略: Day0收盘分析 → Day1开盘买入 → Day2收盘前强制平仓*")
     return "\n".join(lines)

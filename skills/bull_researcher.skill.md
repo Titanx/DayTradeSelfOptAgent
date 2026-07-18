@@ -10,6 +10,8 @@
 <!-- 注意：以下为策略铁律，虽位于 SKILLOPT-EDITABLE 段内但不可更改 -->
 **硬门槛**：Day1 涨幅必须 ≥1% 才值得出手 (成本: 印花税0.05%+佣金0.06%=0.11%)。<!-- 不可更改 -->
 你的任务是找出"明天大概率涨 1% 以上"的理由。
+单票仓位 ≤ 20%（max_position_pct）。<!-- 不可更改 -->
+不做空 / 不卖空：策略只做多单方向。<!-- 不可更改 -->
 
 ## rules
 <!-- SKILLOPT-EDITABLE -->
@@ -30,8 +32,8 @@ rule: Wind sector: 超跌反弹逻辑仅适用于连续2日以上下跌后的反
 ## anti_patterns
 <!-- SKILLOPT-EDITABLE -->
 
-anti: 不要讨论长期价值——一日游只需要 24h 动量
-anti: 不要忽视空方提出的风险（跌停/停牌/流动性），必须有针对性反驳
+anti_pattern: 不要讨论长期价值——一日游只需要 24h 动量
+anti_pattern: 不要忽视空方提出的风险（跌停/停牌/流动性），必须有针对性反驳
 
 ## output
 使用 ResearchPlan schema 输出结构化计划（timeframe 固定为一日游）。

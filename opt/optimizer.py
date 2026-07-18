@@ -19,6 +19,8 @@ sys.path.insert(0, str(PROJECT_DIR / "libs"))
 from dotenv import load_dotenv
 load_dotenv(PROJECT_DIR / ".env", override=True)
 
+from opt.utils import atomic_write_text
+
 INPUT_DIR = PROJECT_DIR / "opt" / "input"
 OUTPUT_DIR = PROJECT_DIR / "opt" / "output"
 SKILLS_DIR = PROJECT_DIR / "skills"
@@ -211,7 +213,7 @@ def run_optimizer(rollout_path: str = None) -> dict:
 
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     output_path = OUTPUT_DIR / "edits.json"
-    output_path.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
+    atomic_write_text(output_path, json.dumps(result, ensure_ascii=False, indent=2))
 
     print("Optimizer output saved to: {}".format(output_path))
     if result.get("analysis"):

@@ -10,6 +10,7 @@
 <!-- 注意：以下为策略铁律，虽位于 SKILLOPT-EDITABLE 段内但不可更改 -->
 硬门槛：Day1 涨幅必须 ≥1% 才值得出手 (成本 0.11%)。<!-- 不可更改 -->
 你的专属任务是**从板块维度**分析行业轮动、资金流向和政策催化剂，为下游 agent 提供板块级别的 Buy/Hold 信号。
+单票仓位 ≤ 20%（max_position_pct）。<!-- 不可更改 -->
 
 ## rules
 <!-- SKILLOPT-EDITABLE -->
@@ -31,10 +32,10 @@ rule: 视觉/安防板块AI应用落地 + 机构调研增加 → 建议关注板
 
 ## anti_patterns
 <!-- SKILLOPT-EDITABLE -->
-anti: 不要和 Bull/Bear 重复评估个股因素——专注于板块级信号
-anti: 不要在无明显板块资金流信号时强行推 Overweight
-anti: 不要忽略板块间的资金跷跷板效应（资金从AI流入光伏 = AI弱 + 光伏强）
-anti: 板块资金流单日数据不可靠——至少需要2日连续信号
+anti_pattern: 不要和 Bull/Bear 重复评估个股因素——专注于板块级信号
+anti_pattern: 不要在无明显板块资金流信号时强行推 Overweight
+anti_pattern: 不要忽略板块间的资金跷跷板效应（资金从AI流入光伏 = AI弱 + 光伏强）
+anti_pattern: 板块资金流单日数据不可靠——至少需要2日连续信号
 
 ## output
 以 "Sector: " 前缀发言，输出结构化的板块轮动评估：
@@ -44,4 +45,4 @@ anti: 板块资金流单日数据不可靠——至少需要2日连续信号
 - 对每个板块给出: Overweight / Neutral / Underweight
 - 给研究主管明确的板块级别建议
 输出结构化板块轮动报告：板块名称 + 轮动方向 + 资金流向 + 代表股票。
-使用 SectorRotationReport schema 输出结构化报告。
+输出结构化报告（自由文本格式）。

@@ -112,11 +112,20 @@ def _prefetch_public_data():
         get_sector_data,
         get_sector_fund_flow_data,
     )
+
+    def _safe(name, fn):
+        try:
+            v = fn()
+            return v if v else ""
+        except Exception as e:
+            logging.warning(f"prefetch {name} failed: {e}")
+            return ""
+
     return {
-        "market_sentiment": get_market_sentiment_data(),
-        "north_flow": get_north_flow_data(),
-        "sector_data": get_sector_data(),
-        "sector_fund_flow": get_sector_fund_flow_data(),
+        "market_sentiment": _safe("sentiment", get_market_sentiment_data),
+        "north_flow": _safe("north", get_north_flow_data),
+        "sector_data": _safe("sector", get_sector_data),
+        "sector_fund_flow": _safe("fund_flow", get_sector_fund_flow_data),
     }
 
 

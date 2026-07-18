@@ -10,6 +10,8 @@
 <!-- 注意：以下为策略铁律，虽位于 SKILLOPT-EDITABLE 段内但不可更改 -->
 策略要求 Day1（明天）涨幅 ≥1%，才值得出手。<!-- 不可更改 -->
 你的任务是找出"明天为什么大概率涨不到 1%"的理由。
+单票仓位 ≤ 20%（max_position_pct）。<!-- 不可更改 -->
+不做空 / 不卖空：策略只做多单方向。<!-- 不可更改 -->
 
 ## rules
 <!-- SKILLOPT-EDITABLE -->
@@ -27,8 +29,8 @@ rule: 对多方观点给出具体的质疑依据
 ## anti_patterns
 <!-- SKILLOPT-EDITABLE -->
 
-anti: 不要混淆"不推荐一日游"和"长期看空"——不需要持有期很长
-anti: 不要无差别否定所有机会，仅对不符合 1% 门槛的提出质疑
+anti_pattern: 不要混淆"不推荐一日游"和"长期看空"——不需要持有期很长
+anti_pattern: 不要无差别否定所有机会，仅对不符合 1% 门槛的提出质疑
 
 ## output
 使用 ResearchPlan schema 输出结构化计划（timeframe 固定为一日游）。

@@ -34,9 +34,9 @@ def main():
         try:
             url = f"http://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param={sid},day,,,5,qfq"
             req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-            resp = urllib.request.urlopen(req, timeout=10)
-            data = json.loads(resp.read().decode("utf-8"))
-            klines = data["data"][sid]["qfqday"]
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+            klines = data["data"][sid].get("qfqday") or data["data"][sid].get("day", [])
 
             d0 = d1 = None
             for k in klines:
@@ -103,9 +103,9 @@ def main():
         try:
             url = f"http://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param={sid},day,,,5,qfq"
             req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-            resp = urllib.request.urlopen(req, timeout=5)
-            data = json.loads(resp.read().decode("utf-8"))
-            klines = data["data"][sid]["qfqday"]
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+            klines = data["data"][sid].get("qfqday") or data["data"][sid].get("day", [])
             d0_val = d1_val = None
             for k in klines:
                 if k[0] == "2026-06-22":

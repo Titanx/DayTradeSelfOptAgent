@@ -25,9 +25,10 @@ def get_0618_prediction(code):
 def get_kline_data(sid):
     url = f"http://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param={sid},day,,,5,qfq"
     req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-    resp = urllib.request.urlopen(req, timeout=10)
-    data = json.loads(resp.read().decode("utf-8"))
-    return data["data"][sid]["qfqday"]
+    with urllib.request.urlopen(req, timeout=10) as resp:
+        data = json.loads(resp.read().decode("utf-8"))
+    klines = data["data"][sid].get("qfqday") or data["data"][sid].get("day", [])
+    return klines
 
 print("=" * 72)
 print("  一日游回测: Day0(0618分析) → 今日(0622实盘)")

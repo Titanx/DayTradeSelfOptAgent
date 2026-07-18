@@ -46,8 +46,8 @@ def get_kline_data(code):
     url = f"http://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param={sid},day,,,10,qfq"
     req = urllib.request.Request(url, headers={"User-Agent":"Mozilla/5.0"})
     try:
-        resp = urllib.request.urlopen(req, timeout=10)
-        klines = json.loads(resp.read().decode("utf-8"))["data"][sid]
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            klines = json.loads(resp.read().decode("utf-8"))["data"][sid]
         klines = klines.get("qfqday") or klines.get("day",[])
         d0c=d1o=d2h=d2l=d2c=None
         for k in klines:

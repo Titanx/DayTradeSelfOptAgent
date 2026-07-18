@@ -41,7 +41,8 @@ def main():
     # 找6月交易日,排除当天(0622) 和 已分析的(0618)
     existing_dates = set()
     RESULTS_DIR = project_dir / "data" / "results"
-    for f in RESULTS_DIR.glob("*_analysis.cache.json"):
+    # (round-15, C-scripts-2): glob 模式补 v10 后缀，与缓存文件命名约定对齐
+    for f in RESULTS_DIR.glob("*_v10_analysis.cache.json"):
         try:
             d = json.loads(f.read_text(encoding="utf-8"))
             if d.get("trade_date"):
@@ -80,7 +81,8 @@ def main():
         for sid, name, sector in STOCKS:
             pure_code = sid[2:]
             # 检查是否已有
-            cache_file = RESULTS_DIR / f"{pure_code}_{trade_date}_analysis.cache.json"
+            # (round-15, C-scripts-2): cache_file 路径补 v10 后缀，否则永远找不到 cache 文件
+            cache_file = RESULTS_DIR / f"{pure_code}_{trade_date}_v10_analysis.cache.json"
             if cache_file.exists():
                 print(f"  {pure_code} {name}: 已有 → 跳过")
                 continue

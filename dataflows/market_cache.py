@@ -916,7 +916,11 @@ class MarketDataCache:
 
         # 2. opinion_cache：按文件修改时间清理
         if self.opinion_cache_dir.exists():
-            for f in self.opinion_cache_dir.glob("*"):
+            # (round-15, C-df-4): opinion_cache uses {symbol}/{trade_date}_{method}.md two-level structure
+            # glob("*") only matches symbol subdirs and never reaches the actual .md files
+            for f in self.opinion_cache_dir.glob("*/*"):
+                if not f.is_file():
+                    continue
                 try:
                     mtime = datetime.fromtimestamp(f.stat().st_mtime)
                     if mtime < cutoff:

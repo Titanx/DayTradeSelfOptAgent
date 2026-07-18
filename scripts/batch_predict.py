@@ -519,6 +519,10 @@ def main():
 
     # --- Summary ---
     # (round-12, C-scripts-4): skipped 项带上 position_pct（从 cache 读取），参与归一化
+    # (round-15, H-scripts-6): skipped 在异常路径下可能为 None（如 main 提前 return 后被外部调用），
+    # 加 None 兜底避免后续列表推导抛 TypeError
+    if skipped is None:
+        skipped = []
     all_results = [{"code": c, "name": n, "sector": s, "rating": r, "conf": 0, "ok": True,
                     "position_pct": p} for c,n,s,r,p in skipped]
     all_results += [{"code": c, "name": n, "sector": s, "rating": "ERR", "conf": 0, "ok": False}

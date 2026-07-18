@@ -44,7 +44,8 @@ def main():
 
     for sid, name, sector in STOCKS:
         code = sid[2:]
-        cache_file = project_dir / "data" / "results" / f"{code}_{TRADE_DATE}_analysis.cache.json"
+        # (round-15, C-scripts-3): cache_file 路径补 v10 后缀，与缓存文件命名约定对齐
+        cache_file = project_dir / "data" / "results" / f"{code}_{TRADE_DATE}_v10_analysis.cache.json"
         if cache_file.exists():
             print(f"  {code} {name}: 已有 → 跳过")
             continue

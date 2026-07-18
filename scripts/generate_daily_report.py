@@ -202,31 +202,48 @@ if backtest_date:
                 continue
             try:
                 klines = get_kline(sid)
-                d0 = None
-                d1 = None
+                # (round-15, C-scripts-5): 改为 D0→D1→D2 三日模型，与 collector.py / batch_backtest.py 对齐
+                # D0=分析日(backtest_date, 用 close), D1=买入日(D0+1交易日, 用 open),
+                # D2=平仓日(D1+1交易日, 用 high 判 +1% 止盈, close 判实际收益)
+                d0_close = None
+                d1_open = None
+                d1_date = None
+                d2_high = d2_low = d2_close = None
+                d2_date = None
                 for k in klines:
                     if k[0] == backtest_date:
-                        d0 = float(k[2])
-                    if k[0] > backtest_date and d1 is None:
-                        # (round-12, C-scripts-3): 补齐 high/low 字段，供 STEP high 基准使用
-                        d1 = {"open": float(k[1]), "close": float(k[2]),
-                              "high": float(k[3]), "low": float(k[4])}
-                if d0 is None or d1 is None:
+                        d0_close = float(k[2])
+                    # D1: backtest_date 后第一个交易日（买入日）
+                    if d1_open is None and d0_close is not None and k[0] > backtest_date:
+                        d1_date = k[0]
+                        d1_open = float(k[1])  # D1 开盘 = 买入价
+                        # 不 break，继续找 D2
+                    # D2: D1 后第一个交易日（卖出日）
+                    if d1_open is not None and k[0] > d1_date and d2_high is None:
+                        d2_date = k[0]
+                        d2_high = float(k[3])   # D2 最高
+                        d2_low = float(k[4])    # D2 最低
+                        d2_close = float(k[2])  # D2 收盘
+                        break
+                if d0_close is None or d1_open is None or d2_high is None:
                     continue
             except Exception:
                 continue
 
-            close_pct = (d1["close"] / d0 - 1) * 100  # 仅打印参考，不参与 HIT 判定
+            # close_pct 仅打印参考（D2 收盘 / D0 收盘），不参与 HIT 判定
+            close_pct = (d2_close / d0_close - 1) * 100
             # (round-11, C-scripts-2): HIT 基准从 d0_close 改为 d1_open（实际买入价），
             # 与 collector.py 的 d1_open 基准对齐，避免隔夜跳空与盘内涨跌混淆
             # (round-14, P0-3): HIT 改用 high 基准，与 STEP 对称，与 _backtest_0703_0707.py 对齐
-            # 变量名 open_pct 保留以减少改动范围，但实际语义为 high 基准涨幅
-            open_pct = (d1["high"] / d1["open"] - 1) * 100  # 改用 high 而非 close
+            # (round-15, C-scripts-5): high 基准改用 D2 high（平仓日日内最高），D1 open 为买入价
+            # 变量名 open_pct 保留以减少改动范围，但实际语义为 D2 high / D1 open 涨幅
+            open_pct = (d2_high / d1_open - 1) * 100
             should_buy = bp["rating"] in ("Buy", "Overweight")
             # (round-12, C-scripts-3): HIT 用 config 的 TARGET_GAIN_PCT（替换硬编码 1.0）
             actually_up = open_pct >= TARGET_GAIN_PCT
             # (round-12, C-scripts-3): STEP 改用 high 基准（日内触达止盈线即踏空），与 collector 对齐
-            step_trig = (d1["high"] / d1["open"] - 1) * 100 >= TARGET_GAIN_PCT  # 保持不变
+            # (round-15, C-scripts-5): STEP 基准改用 D2 high / D1 open
+            step_trig = (d2_high / d1_open - 1) * 100 >= TARGET_GAIN_PCT
 
             if should_buy and actually_up:
                 v = "HIT"

@@ -14,6 +14,8 @@ from dataflows.akshare_adapter import _BJ_TIME
 from config.default_config import get_config as _get_cfg
 _swing_cfg = _get_cfg().get("one_day_swing", {})
 TARGET_GAIN_PCT = _swing_cfg.get("target_gain_pct", 1.0)   # 止盈线 +1%
+# (round-15, H-scripts-1): STOP/FLAT 分类需要止损线，与 _backtest_0703_0707.py 对齐
+STOP_LOSS_PCT = _swing_cfg.get("stop_loss_pct", 3.0)       # 止损线 -3%
 
 STOCKS = [
     ("sz300750", "宁德时代"),
@@ -38,7 +40,8 @@ def main():
     # ---- 1. 收集所有分析日期 ----------
     all_dates = set()
     for _, _, pure_code in [(sid[2:], name, sid[2:]) for sid, name in STOCKS]:
-        for f in RESULTS_DIR.glob(f"{pure_code}_*_analysis.cache.json"):
+        # (round-15, C-scripts-1): glob 模式补 v10 后缀，与缓存文件命名约定对齐
+        for f in RESULTS_DIR.glob(f"{pure_code}_*_v10_analysis.cache.json"):
             try:
                 d = json.loads(f.read_text(encoding="utf-8"))
                 td = d.get("trade_date", "")
@@ -62,7 +65,10 @@ def main():
     print("  多日回测: 5 股 x 若干交易日")
     print("=" * 72)
 
-    day_results = defaultdict(lambda: {"hit": 0, "avoid": 0, "miss": 0, "step": 0})
+    day_results = defaultdict(lambda: {"hit": 0, "avoid": 0, "miss": 0, "step": 0,
+                                       # (round-15, H-scripts-1): 拆分 MISS → STOP/FLAT
+                                       # HIT=止盈+1%, STOP=止损-3%, FLAT=收盘平仓(既未止盈也未止损)
+                                       "stop": 0, "flat": 0})
 
     # M-scripts-2 (round-9): 用 _BJ_TIME 判定"当天"，跳过当天无次日数据的逻辑才不会错位
     today_str = datetime.now(_BJ_TIME).strftime("%Y-%m-%d")
@@ -80,7 +86,8 @@ def main():
 
         for sid, name in STOCKS:
             pure_code = sid[2:]
-            pred_file = RESULTS_DIR / f"{pure_code}_{trade_date}_analysis.cache.json"
+            # (round-15, C-scripts-1): pred_file 路径补 v10 后缀，否则永远找不到 cache 文件
+            pred_file = RESULTS_DIR / f"{pure_code}_{trade_date}_v10_analysis.cache.json"
             if not pred_file.exists():
                 print(f"  {pure_code} {name}: 无预测数据 → 跳过")
                 continue
@@ -144,12 +151,18 @@ def main():
             # HIT=已建仓的止盈，STEP=未建仓的踏空，两者基准相同但语义不同
             # (round-14, P0-2): HIT/STEP 基准改为 D2 high（卖出日日内最高），D1→D2 模型
             hit_trig = (d2_high / d1_open - 1) * 100 >= TARGET_GAIN_PCT
+            # (round-15, H-scripts-1): STOP 基准用 D2 low（日内最低 ≤ 买价-3%），与 _backtest_0703_0707.py 对齐
+            stop_trig = (d2_low / d1_open - 1) * 100 <= -STOP_LOSS_PCT
             step_trig = (d2_high / d1_open - 1) * 100 >= TARGET_GAIN_PCT
 
             if should_buy and hit_trig:
                 verdict = "HIT"
+            elif should_buy and stop_trig:
+                # (round-15, H-scripts-1): 触发 -3% 止损
+                verdict = "STOP"
             elif should_buy:
-                verdict = "MISS"
+                # (round-15, H-scripts-1): 既未止盈也未止损 → 收盘平仓
+                verdict = "FLAT"
             elif step_trig:
                 verdict = "STEP"
             else:
@@ -165,28 +178,35 @@ def main():
     print("=" * 72)
 
     total_hit = total_avoid = total_miss = total_step = 0
+    # (round-15, H-scripts-1): 新增 STOP/FLAT 累计
+    total_stop = total_flat = 0
     for td in dates:
         if td == today_str:
             continue
         r = day_results[td]
         h, a, m, s = r.get("hit", 0), r.get("avoid", 0), r.get("miss", 0), r.get("step", 0)
-        total = h + a + m + s
+        st, fl = r.get("stop", 0), r.get("flat", 0)
+        total = h + a + m + s + st + fl
         if total == 0:
             continue
         total_hit += h
         total_avoid += a
         total_miss += m
         total_step += s
+        total_stop += st
+        total_flat += fl
         acc = (h + a) / total * 100
-        print(f"\n  {td}: 命中{h} 回避{a} 误判{m} 踏空{s}  准确率: {acc:.0f}% ({h+a}/{total})")
+        print(f"\n  {td}: 命中{h} 止损{st} 平仓{fl} 回避{a} 误判{m} 踏空{s}  准确率: {acc:.0f}% ({h+a}/{total})")
 
-    grand_total = total_hit + total_avoid + total_miss + total_step
+    grand_total = total_hit + total_avoid + total_miss + total_step + total_stop + total_flat
     if grand_total:
         print(f"\n{'─' * 50}")
         print(f"  总计: {grand_total} 笔")
-        print(f"  命中: {total_hit}  |  回避: {total_avoid}  |  误判: {total_miss}  |  踏空: {total_step}")
+        print(f"  命中: {total_hit}  |  止损: {total_stop}  |  平仓: {total_flat}  |  回避: {total_avoid}  |  误判: {total_miss}  |  踏空: {total_step}")
         print(f"  总准确率: {(total_hit+total_avoid)/grand_total*100:.0f}%")
-        print(f"  Buy信号准确率: {total_hit}/{total_hit+total_miss} = {total_hit/(total_hit+total_miss)*100 if (total_hit+total_miss) else 0:.0f}%")
+        # (round-15, H-scripts-1): Buy信号准确率分母改为 HIT+STOP+FLAT（拆分自原 MISS）
+        bull_total = total_hit + total_stop + total_flat
+        print(f"  Buy信号准确率: {total_hit}/{bull_total} = {total_hit/bull_total*100 if bull_total else 0:.0f}%")
 
 
 if __name__ == "__main__":

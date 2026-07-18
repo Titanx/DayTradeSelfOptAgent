@@ -216,11 +216,15 @@ def get_stock_daily(symbol: str, start_date: str = None, end_date: str = None,
     if end_date is None:
         end_date = datetime.now(_BJ_TIME).strftime("%Y%m%d")
 
+    # (round-15, C-df-1): respect caller's adjust="" (不复权); only fall back to qfq when None
+    if adjust is None:
+        adjust = "qfq"
+
     # 优先使用东方财富源（部分网络环境可用）
     try:
         df = ak.stock_zh_a_hist(
             symbol=symbol, period="daily",
-            start_date=start_date, end_date=end_date, adjust=adjust or "qfq"
+            start_date=start_date, end_date=end_date, adjust=adjust
         )
         if df is not None and not df.empty:
             col_map = {
@@ -241,7 +245,7 @@ def get_stock_daily(symbol: str, start_date: str = None, end_date: str = None,
     try:
         df = ak.stock_zh_a_daily(
             symbol=f"{prefix}{symbol}",
-            start_date=start_date, end_date=end_date, adjust=adjust or "qfq"
+            start_date=start_date, end_date=end_date, adjust=adjust
         )
         if df is not None and not df.empty and "date" in df.columns:
             df["date"] = pd.to_datetime(df["date"])
@@ -557,7 +561,14 @@ def get_money_flow(symbol: str, days: int = 20) -> Optional[pd.DataFrame]:
         DataFrame
     """
     import akshare as ak
-    df = ak.stock_individual_fund_flow(stock=symbol, market="sh" if symbol.startswith("6") else "sz")
+    # (round-15, C-df-2): include bj for 北交所/新三板 (codes starting with 4/8)
+    if symbol.startswith(("4", "8")):
+        market = "bj"
+    elif symbol.startswith("6"):
+        market = "sh"
+    else:
+        market = "sz"
+    df = ak.stock_individual_fund_flow(stock=symbol, market=market)
     if df is not None and not df.empty:
         df["日期"] = pd.to_datetime(df["日期"])
         df = df.sort_values("日期").tail(days)
@@ -766,7 +777,10 @@ def get_index_daily(symbol: str, start_date: str = None,
     df = ak.stock_zh_index_daily_em(symbol=symbol)
     if df is not None and not df.empty:
         df["日期"] = pd.to_datetime(df["date"] if "date" in df.columns else df["日期"])
-        df = df[(df["日期"] >= start_date) & (df["日期"] <= end_date)]
+        # (round-15, C-df-3): align types — start_date/end_date are "YYYYMMDD" strings, df["日期"] is datetime
+        start_dt = pd.to_datetime(start_date, format="%Y%m%d")
+        end_dt = pd.to_datetime(end_date, format="%Y%m%d")
+        df = df[(df["日期"] >= start_dt) & (df["日期"] <= end_dt)]
         df = df.sort_values("日期")
     return df
 

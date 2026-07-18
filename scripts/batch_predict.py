@@ -323,6 +323,7 @@ def main():
     parser.add_argument("--fresh", action="store_true", help="强制重跑所有股票")
     parser.add_argument("--workers", type=int, default=5, help="并发数 (默认5)")
     parser.add_argument("--no-overview", action="store_true", help="跳过大盘预加载")
+    parser.add_argument("--limit", type=int, default=0, help="只跑前 N 只股票 (默认0=全部)")
     args = parser.parse_args()
 
     if args.date == "auto":
@@ -341,7 +342,29 @@ def main():
 
     skipped = []
     todo = []
-    for code, name, sector in ALL_STOCKS:
+    # (round-15): --limit 支持只跑前 N 只股票 (按板块均匀分配, 避免单板块集中)
+    if args.limit and args.limit > 0:
+        from collections import defaultdict
+        by_sector = defaultdict(list)
+        for code, name, sector in ALL_STOCKS:
+            by_sector[sector].append((code, name, sector))
+        per_sector = max(1, args.limit // len(by_sector))
+        remaining = args.limit - per_sector * len(by_sector)
+        stocks_to_run = []
+        for sec, items in by_sector.items():
+            stocks_to_run.extend(items[:per_sector])
+        # 补齐余数到前几个板块
+        if remaining > 0:
+            for sec, items in by_sector.items():
+                extra = items[per_sector:per_sector + remaining]
+                stocks_to_run.extend(extra)
+                remaining -= len(extra)
+                if remaining <= 0:
+                    break
+    else:
+        stocks_to_run = ALL_STOCKS
+
+    for code, name, sector in stocks_to_run:
         if args.fresh:
             todo.append((code, name, sector))
         else:
@@ -354,7 +377,7 @@ def main():
 
     print("=" * 60)
     print(f"📅 交易日: {trade_date} → {next_date}")
-    print(f"📊 总股票: {len(ALL_STOCKS)} | 跳过: {len(skipped)} | 待跑: {len(todo)} | 🔥 {args.workers} workers")
+    print(f"📊 总股票: {len(stocks_to_run)} | 跳过: {len(skipped)} | 待跑: {len(todo)} | 🔥 {args.workers} workers")
     print("=" * 60)
 
     if not todo:

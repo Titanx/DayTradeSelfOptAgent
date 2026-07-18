@@ -56,6 +56,15 @@ class GraphSetup:
         self.conditional_logic = conditional_logic
         self.config = config
 
+    def _supports_structured_output(self, llm) -> bool:
+        """检测 llm 是否支持 with_structured_output (response_format)
+
+        DeepSeek API 当前不支持 response_format 参数, 调用会返回 400。
+        (round-15): 跳过结构化输出, 直接走自由文本, 避免浪费 API 调用。
+        """
+        model = (getattr(llm, "model_name", "") or getattr(llm, "model", "") or "").lower()
+        return "deepseek" not in model
+
     def build_execution_plan(self) -> AnalystExecutionPlan:
         """构建分析师执行计划"""
         from agents.analysts.fundamental_analyst import create_fundamental_analyst
@@ -193,7 +202,7 @@ class GraphSetup:
                         ]
                         schema_cls = cfg.get("structured_output")
                         render_fn = render_map.get(schema_cls) if schema_cls else None
-                        if schema_cls and render_fn:
+                        if schema_cls and render_fn and self._supports_structured_output(quick):
                             try:
                                 llm_structured = quick.with_structured_output(schema_cls)
                                 report_obj = llm_structured.invoke(messages)
@@ -377,7 +386,7 @@ class GraphSetup:
 
             # 绑定结构化输出 schema，保证下游 Trader 能稳定读取研究计划
             schema_cls = cfg.get("structured_output")
-            if schema_cls:
+            if schema_cls and self._supports_structured_output(deep):
                 try:
                     llm_structured = deep.with_structured_output(schema_cls)
                     plan_obj = llm_structured.invoke(messages)
@@ -409,7 +418,7 @@ class GraphSetup:
 
             # 绑定结构化输出 schema，保证下游风险分析师能稳定读取交易提案
             schema_cls = cfg.get("structured_output")
-            if schema_cls:
+            if schema_cls and self._supports_structured_output(quick):
                 try:
                     llm_structured = quick.with_structured_output(schema_cls)
                     proposal = llm_structured.invoke(messages)
@@ -475,7 +484,7 @@ class GraphSetup:
 
             # 绑定结构化输出 schema
             schema_cls = cfg.get("structured_output")
-            if schema_cls:
+            if schema_cls and self._supports_structured_output(deep):
                 try:
                     llm_structured = deep.with_structured_output(schema_cls)
                     decision = llm_structured.invoke(messages)

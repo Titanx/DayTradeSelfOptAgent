@@ -105,7 +105,8 @@ def fetch_market_overview(trade_date: str) -> dict:
     indices = {}
     for idx_code, idx_name in MAJOR_INDICES:
         try:
-            df = route_to_vendor("get_index_daily", idx_code, config={}, max_retries=1)
+            # (round-15): get_index_daily 不接受 max_retries, _safe_akshare_call 装饰器已自带重试
+            df = route_to_vendor("get_index_daily", idx_code, config={})
             if df is not None and len(df) > 0:
                 last = df.iloc[-1]
                 indices[idx_name] = {

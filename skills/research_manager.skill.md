@@ -28,6 +28,7 @@ rule: 如果多方逻辑坚实且预期涨幅 ≥1%（动量好+催化剂明确+
 rule: 如果多方略优但涨幅预期不到 1% 或空方风险不可忽视 → Hold
 rule: 如果风险明显大于机会（流动性差/追高/趋势向下）→ Underweight/Hold
 rule: Vision/视觉板块规则见 PM decision_rules，RM 在此基础上做研究综合，不重复条件
+rule: Energy/储能板块规则见 PM decision_rules，RM 在此基础上做研究综合，不重复条件
 
 ## anti_patterns
 <!-- SKILLOPT-EDITABLE -->

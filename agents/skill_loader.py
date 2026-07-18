@@ -17,6 +17,10 @@ def _md_to_prompt(md_text: str) -> str:
 
     保持前端元数据(stage/strategy)和标记<!-- SKILLOPT-EDITABLE -->不变,
     以便 Optimizer LLM 后续编辑。
+
+    (round-14, P0-1): 修复 prose 过滤导致铁律和身份声明丢失的问题。
+    在 SKILLOPT-EDITABLE 段内，除了 rule:/anti_pattern: 行外，
+    保留含 '不可更改' 标记的散文行（铁律 prose）和加粗标题行（身份声明）。
     """
     lines = md_text.split("\n")
     out = []
@@ -28,14 +32,27 @@ def _md_to_prompt(md_text: str) -> str:
             continue
         if in_editable:
             stripped = line.strip()
-            if stripped.startswith("rule:") or stripped.startswith("anti_pattern:"):
-                out.append(line)
-            elif stripped.startswith("## ") or stripped.startswith("---"):
+            if stripped.startswith("## ") or stripped.startswith("---"):
                 in_editable = False
                 out.append(line)
-            elif stripped == "":
+                continue
+            # 保留 rule: 和 anti_pattern: 行
+            if stripped.startswith("rule:") or stripped.startswith("anti_pattern:"):
                 out.append(line)
-            # skip other lines inside editable section (explanatory text)
+                continue
+            # (round-14, P0-1): 保留含"不可更改"标记的散文行（铁律 prose）
+            if "不可更改" in stripped:
+                out.append(line)
+                continue
+            # (round-14, P0-1): 保留加粗标题行（身份声明，如 "**硬门槛**：..." / "**你的任务**：..."）
+            # 只保留以 ** 开头且包含中文冒号或英文冒号的行
+            if stripped.startswith("**") and ("：" in stripped or ":" in stripped):
+                out.append(line)
+                continue
+            # 保留空行
+            if stripped == "":
+                out.append(line)
+            # 其他 prose 跳过
         else:
             out.append(line)
     return "\n".join(out)

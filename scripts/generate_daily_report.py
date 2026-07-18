@@ -219,12 +219,14 @@ if backtest_date:
             close_pct = (d1["close"] / d0 - 1) * 100  # 仅打印参考，不参与 HIT 判定
             # (round-11, C-scripts-2): HIT 基准从 d0_close 改为 d1_open（实际买入价），
             # 与 collector.py 的 d1_open 基准对齐，避免隔夜跳空与盘内涨跌混淆
-            open_pct = (d1["close"] / d1["open"] - 1) * 100
+            # (round-14, P0-3): HIT 改用 high 基准，与 STEP 对称，与 _backtest_0703_0707.py 对齐
+            # 变量名 open_pct 保留以减少改动范围，但实际语义为 high 基准涨幅
+            open_pct = (d1["high"] / d1["open"] - 1) * 100  # 改用 high 而非 close
             should_buy = bp["rating"] in ("Buy", "Overweight")
             # (round-12, C-scripts-3): HIT 用 config 的 TARGET_GAIN_PCT（替换硬编码 1.0）
             actually_up = open_pct >= TARGET_GAIN_PCT
             # (round-12, C-scripts-3): STEP 改用 high 基准（日内触达止盈线即踏空），与 collector 对齐
-            step_trig = (d1["high"] / d1["open"] - 1) * 100 >= TARGET_GAIN_PCT
+            step_trig = (d1["high"] / d1["open"] - 1) * 100 >= TARGET_GAIN_PCT  # 保持不变
 
             if should_buy and actually_up:
                 v = "HIT"

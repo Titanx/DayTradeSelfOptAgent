@@ -95,45 +95,56 @@ def main():
             if not klines:
                 continue
 
+            # (round-14, P0-2): 改为 D0→D1→D2 三日模型，与项目 collector.py / batch_backtest.py 对齐
+            # D0=分析日, D1=买入日(开盘买), D2=卖出日(用 high 判止盈, close 判最终收益)
             d0_close = None
-            d1_open = d1_close = d1_high = d1_low = None
+            d1_open = None
             d1_date = None
+            d2_high = d2_low = d2_close = None
+            d2_date = None
             for k in klines:
                 if k[0] == trade_date:
                     d0_close = float(k[2])
-                if d1_close is None and d0_close is not None and k[0] > trade_date:
+                # D1: trade_date 后第一个交易日（买入日）
+                if d1_open is None and d0_close is not None and k[0] > trade_date:
                     d1_date = k[0]
-                    d1_open = float(k[1])
-                    d1_close = float(k[2])
-                    d1_high = float(k[3])
-                    d1_low = float(k[4])
+                    d1_open = float(k[1])  # D1 开盘 = 买入价
+                    # 不 break，继续找 D2
+                # D2: D1 后第一个交易日（卖出日）
+                if d1_open is not None and k[0] > d1_date and d2_high is None:
+                    d2_date = k[0]
+                    d2_high = float(k[3])   # D2 最高
+                    d2_low = float(k[4])    # D2 最低
+                    d2_close = float(k[2])  # D2 收盘
                     break
 
             if d0_close is None:
                 print(f"  {pure_code} {name}: {trade_date} 无K线")
                 continue
-            if d1_close is None:
+            if d1_open is None:
                 print(f"  {pure_code} {name}: {trade_date} 无次日数据(可能周末)")
                 continue
-            # M-scripts-4 (round-9): 补 d1_open/d1_high 的 None 校验，避免 d1o 基准计算抛 TypeError
-            if d1_open is None or d1_high is None:
-                print(f"  {pure_code} {name}: {trade_date} 次日开/高缺失")
+            # M-scripts-4 (round-9): 补 d1_open/d2_high 的 None 校验，避免 d1o 基准计算抛 TypeError
+            if d2_high is None:
+                print(f"  {pure_code} {name}: {trade_date} D2(卖出日)数据缺失")
                 continue
 
             rating = pred.get("rating", "?")
             confidence = pred.get("confidence", 0)
 
-            close_pct = (d1_close / d0_close - 1) * 100  # 仅打印参考，不参与 HIT 判定
+            close_pct = (d2_close / d0_close - 1) * 100  # 仅打印参考，不参与 HIT 判定
             # (round-11, C-scripts-2): HIT 基准从 d0_close 改为 d1_open（实际买入价），
             # 与 collector.py 的 d1_open 基准对齐，避免隔夜跳空与盘内涨跌混淆
-            open_pct = (d1_close / d1_open - 1) * 100
+            # (round-14, P0-2): 用 D2 close 计算实际卖出收益（D2收盘/D1开盘）
+            open_pct = (d2_close / d1_open - 1) * 100
             net_pct = open_pct - 0.11  # 扣除成本
 
             should_buy = rating in ("Buy", "Overweight")
             # (round-12, H-scripts-5): HIT 也用 high 基准（日内触达止盈线即 HIT），与 STEP 对称
             # HIT=已建仓的止盈，STEP=未建仓的踏空，两者基准相同但语义不同
-            hit_trig = (d1_high / d1_open - 1) * 100 >= TARGET_GAIN_PCT
-            step_trig = (d1_high / d1_open - 1) * 100 >= TARGET_GAIN_PCT
+            # (round-14, P0-2): HIT/STEP 基准改为 D2 high（卖出日日内最高），D1→D2 模型
+            hit_trig = (d2_high / d1_open - 1) * 100 >= TARGET_GAIN_PCT
+            step_trig = (d2_high / d1_open - 1) * 100 >= TARGET_GAIN_PCT
 
             if should_buy and hit_trig:
                 verdict = "HIT"
@@ -146,7 +157,7 @@ def main():
 
             day_results[trade_date][verdict.lower().replace(" ","_")] += 1
 
-            print(f"  {pure_code} {name}: {rating:12s} conf={confidence:.0%}  →  {d1_date}: c2c={close_pct:+.2f}% o2c={open_pct:+.2f}%  [{verdict}]")
+            print(f"  {pure_code} {name}: {rating:12s} conf={confidence:.0%}  →  {d2_date}: c2c={close_pct:+.2f}% o2c={open_pct:+.2f}%  [{verdict}]")
 
     # ---- 4. 汇总 ----------
     print("\n" + "=" * 72)

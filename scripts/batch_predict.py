@@ -344,7 +344,7 @@ def main():
     todo = []
     # (round-15): --limit 支持只跑前 N 只股票 (按板块均匀分配, 避免单板块集中)
     if args.limit and args.limit > 0:
-        from collections import defaultdict
+        # (round-15): 按板块均匀分配, 避免单板块集中
         by_sector = defaultdict(list)
         for code, name, sector in ALL_STOCKS:
             by_sector[sector].append((code, name, sector))

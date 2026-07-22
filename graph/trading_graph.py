@@ -542,6 +542,22 @@ class AStockTradingGraph:
             decision_text = (decision_text or "") + \
                 "\n\n**v2.5 Sell反转豁免**: reversal_candidate=True → Sell降级Hold"
 
+        # v2.5 "Reversal": BEAR 日反转候选强制参与 — PM prompt 软约束不足, 代码层兜底
+        # reversal_candidate=True + BEAR日 + 通过hard_filter → Hold升级Overweight, 仓位10%
+        if is_bear and reversal_candidate and rating == "Hold" and not hard_filtered:
+            bear_cap = self.config.get("one_day_swing", {}).get(
+                "bear_reversal_position_cap", 0.10)
+            rating = "Overweight"
+            action = "Buy"
+            position_pct = bear_cap
+            confidence = max(confidence, 0.5)
+            logger.info(
+                f"v2.5 BEAR反转强制参与 [{symbol}] Hold→Overweight "
+                f"(reversal_candidate=True, cap={bear_cap:.0%})")
+            decision_text = (decision_text or "") + \
+                f"\n\n**v2.5 BEAR反转强制参与**: reversal_candidate=True " + \
+                f"→ Hold升级Overweight, 仓位{bear_cap:.0%}"
+
         result = {
             "symbol": symbol,
             "stock_name": stock_name,

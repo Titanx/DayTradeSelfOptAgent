@@ -78,6 +78,8 @@ DEFAULT_CONFIG = {
         "max_recent_gain_pct": 15,       # 近 5 日最大涨幅: 15% (追高过滤)
         "ban_st_stocks": True,           # 禁止 ST 股票
         # (round-9, L-core-8): max_position_pct 见顶层（去重，原重复定义在此）
+        # v2.5 "Reversal": BEAR 闸门弹性化 — 反转候选保留 10% 仓位上限
+        "bear_reversal_position_cap": 0.10,  # BEAR 日 reversal_candidate=True 时仓位上限
     },
 
     # --- 基准指数 --- (M4: 以下两项 legacy, not read — 实际基准在 akshare_adapter 中硬编码)

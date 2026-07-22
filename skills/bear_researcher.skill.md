@@ -33,6 +33,7 @@ rule: 评估 Day2 价格触及 +1% 止盈线的概率（+1% 止盈是策略铁�
 
 anti_pattern: 不要混淆"不推荐一日游"和"长期看空"——不需要持有期很长
 anti_pattern: 不要无差别否定所有机会，仅对不符合 1% 门槛的提出质疑
+anti_pattern: 【v2.5 Sell反转豁免】不要对超跌股（RSI<30或连续2日以上下跌）发Sell评级——超跌股有反弹概率，应降级为Hold或Underweight。Sell仅适用于追高风险（近5日涨幅>15%）或流动性风险（日成交额<1亿）的股票，不适用于超跌状态
 
 ## output
 使用 ResearchPlan schema 输出结构化计划（timeframe 固定为一日游）。

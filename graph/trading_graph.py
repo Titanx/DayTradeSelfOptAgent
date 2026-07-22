@@ -437,6 +437,23 @@ class AStockTradingGraph:
         decision_text = final_state.get("final_decision", "")
         rating, action, confidence = self._parse_decision(decision_text)
 
+        # v2.5 "Reversal": BEAR 闸门弹性化 — 解析 reversal_candidate + market_direction
+        # 从 Reversal 文本解析反转候选标记 (Reversal 评级 Buy/Overweight 即为反转候选)
+        market_direction = final_state.get("market_direction", "") or ""
+        md_upper = market_direction.upper()
+        is_bear = "BEAR" in md_upper and "STRONG_BEAR" not in md_upper
+        is_strong_bear = "STRONG_BEAR" in md_upper
+        reversal_candidate = False
+        for m in final_state.get("messages", []):
+            c = str(m.content) if hasattr(m, "content") else ""
+            if c.startswith("Reversal:"):
+                for r in ("Buy", "Overweight", "Hold", "Underweight", "Sell"):
+                    if r in c:
+                        if r in ("Buy", "Overweight"):
+                            reversal_candidate = True
+                        break
+                break
+
         # H4 硬过滤：ST/流动性/跌停/停牌 — 仅拦截 Buy/Overweight
         # (round-12, C-core-1): 引入 hard_filtered flag，避免 position_pct=0.0 被后续重新解析覆盖
         hard_filtered = False
@@ -496,8 +513,34 @@ class AStockTradingGraph:
                     # 硬约束：单票 ≤ 20%
                     max_pos = self.config.get("max_position_pct", 0.2)
                     position_pct = min(position_pct, max_pos)
+                    # v2.5 "Reversal": BEAR 日反转候选仓位 cap 10%
+                    if is_bear and reversal_candidate and rating in ("Buy", "Overweight"):
+                        bear_cap = self.config.get("one_day_swing", {}).get(
+                            "bear_reversal_position_cap", 0.10)
+                        position_pct = min(position_pct, bear_cap)
+                        logger.info(
+                            f"v2.5 BEAR反转cap [{symbol}] reversal_candidate=True "
+                            f"→ position cap {bear_cap:.0%}")
             except Exception as e:
                 logger.debug(f"position_pct 解析失败 [{symbol}]: {e}")
+
+        # v2.5 "Reversal": STRONG_BEAR 日非反转候选强制 Hold (维持 v1.0 极端保守行为)
+        if is_strong_bear and rating in ("Buy", "Overweight") and not reversal_candidate:
+            logger.info(f"v2.5 STRONG_BEAR拦截 [{symbol}] {rating}→Hold (非反转候选)")
+            rating = "Hold"
+            action = "Hold"
+            position_pct = 0.0
+            decision_text = (decision_text or "") + \
+                "\n\n**v2.5 STRONG_BEAR闸门**: 非反转候选 → 强制 Hold"
+
+        # v2.5 "Reversal": Sell 信号反转豁免 — 反转候选的 Sell 降级为 Hold
+        # 7/17 回测发现 5 个 Sell 信号 4 个大涨, 根因是 Bear 对超跌股误发 Sell
+        if reversal_candidate and rating == "Sell":
+            logger.info(f"v2.5 Sell反转豁免 [{symbol}] Sell→Hold (reversal_candidate=True)")
+            rating = "Hold"
+            action = "Hold"
+            decision_text = (decision_text or "") + \
+                "\n\n**v2.5 Sell反转豁免**: reversal_candidate=True → Sell降级Hold"
 
         result = {
             "symbol": symbol,
@@ -512,6 +555,9 @@ class AStockTradingGraph:
             "debate_rounds": final_state.get("investment_debate_state", {}).get("count", 0),
             "risk_rounds": final_state.get("risk_debate_state", {}).get("count", 0),
             "messages_count": len(final_state.get("messages", [])),
+            # v2.5 "Reversal": 持久化反转候选标记 + BEAR 状态 (回测脚本读取)
+            "reversal_candidate": reversal_candidate,
+            "market_bear": is_bear or is_strong_bear,
         }
 
         # 持久化决策

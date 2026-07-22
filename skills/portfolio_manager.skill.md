@@ -34,7 +34,8 @@ rule: 硬门槛（默认）: 如果预期 Day1 涨幅不够 1%（成本 0.11%）
 rule: 如果你认为 Day1 能涨 ≥1%：输出 Buy 或 Overweight
 rule: 如果你不确定或看空：输出 Hold / Underweight / Sell
 rule: 聚焦短期：评估的是"明天会不会涨 1% 以上"，不是"这个公司好不好"
-rule: 【市场方向闸门】优先阅读"⚠️ 市场方向闸门"中的指令。STRONG_BULL 日必须输出1-2个Buy，BULL日至少1个Buy。STRONG_BEAR 日最多1个Buy。NEUTRAL 日正常判断但不要全Hold（前提是至少有1只股票满足+1%硬门槛或板块例外）
+rule: 【市场方向闸门】优先阅读"⚠️ 市场方向闸门"中的指令。STRONG_BULL 日必须输出1-2个Buy，BULL日至少1个Buy。STRONG_BEAR 日最多1个Buy（仅限反转候选）。NEUTRAL 日正常判断但不要全Hold（前提是至少有1只股票满足+1%硬门槛或板块例外）
+rule: 【v2.5 BEAR日反转弹性闸门】当大盘方向为BEAR（非STRONG_BEAR）且反弹分析师(Reversal)给出Buy/Overweight评级时，PM应对该股输出Buy/Overweight，仓位上限10%（bear_reversal_position_cap）。这是v2.5的核心改进：BEAR日不再一刀切全Hold，反转候选保留低仓位参与反弹。STRONG_BEAR日仍维持极端保守（非反转候选强制Hold）
 rule: 【板块动量加权】如果"板块动量信号"显示该板块为🔥HOT(资金流入TOP-3)，Bull论据可信度+20%，此时Bull+Reversal一致即可输出Buy/Overweight，无需达到常规的70%信心度门槛。即Bull+Reversal一致+板块HOT → 应输出Buy/Overweight，即使Bear有弱反驳
 rule: Wind sector: 如果Bear指出板块资金连续3日净流出且无政策/招标/装机数据催化 → 即使Bull有技术面反弹信号也必须Hold。Wind sector需要明确的次日催化剂（如龙头发布中标公告、政策发布、装机数据超预期）才能做一日游，不能仅凭超跌反弹逻辑买入
 rule: AI板块（688256/300033/002230/000977）：如果股票已连续3日以上上涨（累计涨幅>8%）且Bear指出追高风险 → 必须Hold。AI板块一日游只做超跌反弹（连续2日以上下跌后的反弹），不做追涨。即使板块动量信号为HOT，连续上涨后的追涨信号可信度-30%

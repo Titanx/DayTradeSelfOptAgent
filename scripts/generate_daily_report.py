@@ -203,12 +203,14 @@ if args.mode in ("forecast", "combined") and analysis_date:
         lines.append("")
 
 # ====== Part 2: Backtest ======
+# --d1 = D0 analysis date (= cache trade_date)
+# D0 (close) -> D1 (next-day open buy) -> D2 (next-day high/close sell)
 if args.mode in ("backtest", "combined") and backtest_date:
-    _is_d1_model = args.mode == "backtest"
+    _is_d1_model = False  # backtest mode also uses D0 model (was: args.mode == "backtest")
     lines.append("---")
     lines.append("")
-    if _is_d1_model:
-        lines.append("## Backtest (D1={} open buy -> D2 next-day sell)".format(backtest_date))
+    if args.mode == "backtest":
+        lines.append("## Backtest (D0={} analyze -> D1 buy -> D2 sell)".format(backtest_date))
     else:
         lines.append("## 2. Yesterday's Backtest ({} prediction -> next-day actual)".format(backtest_date))
     lines.append("")

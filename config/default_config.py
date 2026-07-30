@@ -62,7 +62,7 @@ DEFAULT_CONFIG = {
     "enable_opinion_monitor": True,      # 启用舆论监控
 
     # --- 交易参数 ---
-    "initial_capital": 100000,           # 初始资金
+    "initial_capital": 1000000,          # 初始资金 (100万)
     "max_position_pct": 0.2,             # 单只股票最大仓位 (与 README 一致: 20%)
     # (round-9, L-core-7): LangGraph recursion_limit，默认 120 (4 分析师工具循环 + 辩论 + 风险辩论 + PM)
     "recursion_limit": 120,

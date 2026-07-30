@@ -72,6 +72,60 @@ def pct_str(v):
     return "{:+.2f}%".format(v)
 
 
+# (P1-fix#9) 提取纯函数用于单元测试 — 模拟单笔交易收益计算
+def simulate_trade_return(high_pct, low_pct, close_pct,
+                          target_gain_pct, stop_loss_pct):
+    """根据 D2 日内价格波动计算单笔交易收益(%)。
+
+    保守最坏情形假设: 日内时序不可还原，若最低价触及止损则按止损计。
+    实际可能存在先 +1% 止盈再回落 -3% 的场景，此处简化为保守判断。
+
+    Args:
+        high_pct:  (d2_high / d1_open - 1) * 100
+        low_pct:   (d2_low  / d1_open - 1) * 100, 可为 None
+        close_pct: (d2_close/ d1_open - 1) * 100
+        target_gain_pct: 止盈阈值(正数, 如 1.0 表示 +1%)
+        stop_loss_pct:   止损阈值(正数, 如 3.0 表示 -3%)
+
+    Returns:
+        (trade_ret_pct, action) — action ∈ {"TP","SL","Close"}
+    """
+    if low_pct is not None and low_pct <= -stop_loss_pct:
+        return -stop_loss_pct, "SL"
+    if high_pct >= target_gain_pct:
+        return target_gain_pct, "TP"
+    return close_pct, "Close"
+
+
+def calc_pnl(trades, initial_capital, target_gain_pct, stop_loss_pct):
+    """汇总模拟交易损益。
+
+    Args:
+        trades: list of {"code","name","pos"(小数),"ret"(%)}
+        initial_capital: 初始本金
+        target_gain_pct: 止盈阈值(正数, 如 1.0)
+        stop_loss_pct:   止损阈值(正数, 如 3.0)
+
+    Returns:
+        dict with keys: total_pos, weighted_ret_pct, profit,
+                        tp_count, sl_count, close_count
+    """
+    total_pos = sum(t["pos"] for t in trades)
+    weighted_ret_pct = sum(t["ret"] * t["pos"] for t in trades)
+    profit = weighted_ret_pct / 100.0 * initial_capital
+    tp_count = sum(1 for t in trades if t["ret"] >= target_gain_pct)
+    sl_count = sum(1 for t in trades if t["ret"] <= -stop_loss_pct)
+    close_count = len(trades) - tp_count - sl_count
+    return {
+        "total_pos": total_pos,
+        "weighted_ret_pct": weighted_ret_pct,
+        "profit": profit,
+        "tp_count": tp_count,
+        "sl_count": sl_count,
+        "close_count": close_count,
+    }
+
+
 # ---- discover dates ----
 # M-scripts-1 (round-9): 用 _BJ_TIME 保证报告文件名与 Generated 时间戳在非北京时间服务器上也正确
 today = datetime.now(_BJ_TIME)
@@ -135,8 +189,14 @@ lines.append("**Strategy**: One-Day Swing (Day0 analyze -> Day1 buy -> Day2 forc
 _d_cfg = get_config()
 # (round-12, C-scripts-3): 从 config 读取 target_gain_pct，避免硬编码 1.0
 TARGET_GAIN_PCT = _d_cfg.get("one_day_swing", {}).get("target_gain_pct", 1.0)
+STOP_LOSS_PCT = _d_cfg.get("one_day_swing", {}).get("stop_loss_pct", 3.0)
+INITIAL_CAPITAL = _d_cfg.get("initial_capital", 1000000)
+# (P0-fix#3) 策略铁律: 单票仓位上限强制约束，避免预测结果异常突破 max_position_pct
+MAX_POSITION_PCT = _d_cfg.get("max_position_pct", 0.2)
 lines.append("**Model**: " + str(_d_cfg.get("deep_think_llm", "?")) + "  temperature=" + str(_d_cfg.get("temperature", "?")))
-lines.append("**Target**: >=1% gain (net ~0.89% after 0.11% cost)")
+# (P3-fix#5) Target 字符串使用配置值，避免改 config 后报告头不同步
+lines.append("**Target**: >={tp}% gain (net ~{net:.2f}% after 0.11% cost)".format(
+    tp=int(TARGET_GAIN_PCT), net=TARGET_GAIN_PCT - 0.11))
 lines.append("")
 
 # ====== Part 1: Today's Prediction ======
@@ -218,6 +278,7 @@ if args.mode in ("backtest", "combined") and backtest_date:
     backtest_preds = load_predictions(backtest_date)
     if backtest_preds:
         hit = 0; avoid = 0; miss = 0; step = 0
+        sim_trades = []  # v2.5: 模拟交易 (本金 100万, +1% 止盈 / -3% 止损 / 收盘平仓)
         table_lines = []
         table_lines.append("| Code | Name | Sector | Prediction | Conf | CloseChg | HighChg | Result |")
         table_lines.append("|------|------|--------|:--:|:--:|:--:|:--:|:--:|")
@@ -230,21 +291,22 @@ if args.mode in ("backtest", "combined") and backtest_date:
             try:
                 klines = get_kline(sid)
                 if _is_d1_model:
-                    # D1 model (backtest mode): backtest_date=D1(买入日, open), D2=下一交易日(high/close)
-                    d1_open = None; d2_high = d2_close = None
+                    # D1 model (backtest mode): backtest_date=D1(买入日, open), D2=下一交易日(high/low/close)
+                    d1_open = None; d2_high = d2_low = d2_close = None
                     for k in klines:
                         if k[0] == backtest_date:
                             d1_open = float(k[1])
                         if d1_open is not None and k[0] > backtest_date and d2_high is None:
                             d2_high = float(k[3])
+                            d2_low = float(k[4])
                             d2_close = float(k[2])
                             break
-                    if d1_open is None or d2_high is None:
+                    if d1_open is None or d2_high is None or d2_low is None:
                         continue
                     close_pct = (d2_close / d1_open - 1) * 100
                 else:
-                    # D0 model (combined legacy): backtest_date=D0(分析日,close), D1=下一交易日(open), D2=再下一交易日(high/close)
-                    d0_close = None; d1_open = None; d1_date = None; d2_high = d2_close = None
+                    # D0 model (combined legacy): backtest_date=D0(分析日,close), D1=下一交易日(open), D2=再下一交易日(high/low/close)
+                    d0_close = None; d1_open = None; d1_date = None; d2_high = d2_low = d2_close = None
                     for k in klines:
                         if k[0] == backtest_date:
                             d0_close = float(k[2])
@@ -253,24 +315,29 @@ if args.mode in ("backtest", "combined") and backtest_date:
                             d1_open = float(k[1])
                         if d1_open is not None and k[0] > d1_date and d2_high is None:
                             d2_high = float(k[3])
+                            d2_low = float(k[4])
                             d2_close = float(k[2])
                             break
-                    if d0_close is None or d1_open is None or d2_high is None:
+                    if d0_close is None or d1_open is None or d2_high is None or d2_low is None:
                         continue
-                    close_pct = (d2_close / d0_close - 1) * 100
-            except Exception:
+            except Exception as e:
+                # (P2-fix#8) 不再静默吞异常，输出 warning 便于排查数据问题
+                print(f"  [warn] {code} K线获取/解析失败: {e}", file=sys.stderr)
                 continue
 
-            open_pct = (d2_high / d1_open - 1) * 100
+            high_pct = (d2_high / d1_open - 1) * 100
+            # (P3-fix#6) d2_low 真值判断改 is not None，避免 d2_low==0 的边界误判
+            low_pct = (d2_low / d1_open - 1) * 100 if d2_low is not None else None
+            close_pct = (d2_close / d1_open - 1) * 100
             should_buy = bp["rating"] in ("Buy", "Overweight")
-            actually_up = open_pct >= TARGET_GAIN_PCT
-            step_trig = open_pct >= TARGET_GAIN_PCT
+            actually_up = high_pct >= TARGET_GAIN_PCT
+            # (P3-fix#7) 删除冗余 step_trig (与 actually_up 完全相同)
 
             if should_buy and actually_up:
                 v = "HIT"; hit += 1
             elif should_buy:
                 v = "MISS"; miss += 1
-            elif step_trig:
+            elif actually_up:
                 v = "STEP"; step += 1
             else:
                 v = "AVOID"; avoid += 1
@@ -278,9 +345,19 @@ if args.mode in ("backtest", "combined") and backtest_date:
             table_lines.append(
                 "| {c} | {n} | {sec} | {r} | {cf:.0%} | {cp} | {op} | {v} |".format(
                     c=code, n=name, sec=sector, r=bp["rating"], cf=bp["confidence"],
-                    cp=pct_str(close_pct), op=pct_str(open_pct), v=v,
+                    cp=pct_str(close_pct), op=pct_str(high_pct), v=v,
                 )
             )
+
+            # v2.5: 模拟收益 (仅 Buy/Overweight) — +1% 止盈 / -3% 止损 / 收盘平仓
+            if should_buy:
+                # (P0-fix#3) 策略铁律: 单票仓位 <= MAX_POSITION_PCT (默认 20%)
+                raw_pos = bp.get("position_pct", 0.1)
+                pos_pct = min(raw_pos if raw_pos else 0.1, MAX_POSITION_PCT)
+                # (P1-fix#9) 调用纯函数计算单笔收益
+                trade_ret, _action = simulate_trade_return(
+                    high_pct, low_pct, close_pct, TARGET_GAIN_PCT, STOP_LOSS_PCT)
+                sim_trades.append({"code": code, "name": name, "pos": pos_pct, "ret": trade_ret})
 
         total = hit + avoid + miss + step
         if total == 0:
@@ -304,6 +381,48 @@ if args.mode in ("backtest", "combined") and backtest_date:
                     )
                 )
             lines.append("")
+
+            # v2.5: 模拟收益 (本金按 config, 单票按仓位比例, +1% 止盈 / -3% 止损 / 收盘平仓)
+            if sim_trades:
+                # (P1-fix#9) 调用纯函数汇总损益
+                pnl = calc_pnl(sim_trades, INITIAL_CAPITAL, TARGET_GAIN_PCT, STOP_LOSS_PCT)
+                total_pos = pnl["total_pos"]
+                weighted_ret_pct = pnl["weighted_ret_pct"]
+                profit = pnl["profit"]
+                tp_count = pnl["tp_count"]
+                sl_count = pnl["sl_count"]
+                close_count = pnl["close_count"]
+
+                lines.append("### 💰 Simulated P&L (Capital ¥{cap:,})".format(cap=INITIAL_CAPITAL))
+                lines.append("")
+                lines.append("| Metric | Value |")
+                lines.append("|--------|:--:|")
+                lines.append("| Trades | {n} |".format(n=len(sim_trades)))
+                lines.append("| Total Position | {p:.0%} |".format(p=total_pos))
+                lines.append("| Take-Profit (+{tp}%) | {c} |".format(tp=int(TARGET_GAIN_PCT), c=tp_count))
+                lines.append("| Stop-Loss (-{sl}%) | {c} |".format(sl=int(STOP_LOSS_PCT), c=sl_count))
+                lines.append("| Close (forced) | {c} |".format(c=close_count))
+                lines.append("| Return | **{r:+.2f}%** |".format(r=weighted_ret_pct))
+                lines.append("| Profit | **¥{p:,.0f}** |".format(p=profit))
+                lines.append("")
+                # (P2-fix#4) 总仓位超额风险提示
+                if total_pos > 1.0:
+                    lines.append("> ⚠️ Total position {p:.0%} > 100%: requires margin/leverage or per-trade capital reallocation".format(p=total_pos))
+                    lines.append("")
+
+                # 明细表 — 按 ret 阈值分类 (trade_ret 已是结算后值，无需重算)
+                lines.append("| Code | Name | Position | Return | Action |")
+                lines.append("|------|------|:--:|:--:|:--:|")
+                for t in sim_trades:
+                    if t["ret"] >= TARGET_GAIN_PCT:
+                        act = "TP"
+                    elif t["ret"] <= -STOP_LOSS_PCT:
+                        act = "SL"
+                    else:
+                        act = "Close"
+                    lines.append("| {c} | {n} | {p:.0%} | {r:+.2f}% | {a} |".format(
+                        c=t["code"], n=t["name"], p=t["pos"], r=t["ret"], a=act))
+                lines.append("")
 
         lines.extend(table_lines)
         lines.append("")
